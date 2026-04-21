@@ -1,0 +1,17 @@
+target_acc: 0.92
+
+scoring:
+  saturation_ceiling: 0.95
+
+live_diagnostic:
+  tolerance: 0.30
+
+defensibility:
+  sample_size: 10
+
+live_batch_size: 128
+
+paths:
+  workspace: ./workspace
+  judge_logs: ./judge_logs
+  data: ./data/cifar10

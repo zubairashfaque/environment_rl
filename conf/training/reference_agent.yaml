@@ -1,0 +1,19 @@
+seed: 42
+
+initial_hparams:
+  lr: 0.3
+  batch_size: 128
+  optimizer: sgd
+  momentum: 0.9
+  weight_decay: 5.0e-4
+  activation: relu
+
+max_epochs: 40
+warmup_epochs: 2
+
+model:
+  num_classes: 10
+  base_channels: 32
+  num_blocks: 6
+  use_bn: true
+  init: he
