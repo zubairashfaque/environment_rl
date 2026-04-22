@@ -32,6 +32,8 @@ multirun/
 # Project-specific runtime artifacts (never commit)
 data/cifar10/cifar-10-batches-py/
 data/cifar10/*.tar.gz
+data/cifar10/splits.json
+data/
 workspace/
 judge_logs/
 llm_runs/
