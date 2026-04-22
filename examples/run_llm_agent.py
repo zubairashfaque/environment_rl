@@ -1,4 +1,8 @@
-"""Run the in-context iterative LLM agent.
+"""Run the Iterative Self-Refine LLM agent (NOT reinforcement learning).
+
+This script runs the training+judging pipeline N times with an OpenAI model
+as the decision-maker. Between attempts, prior scores and violations are
+injected into the next attempt's system prompt. Weights never change.
 
 Example::
 
@@ -6,10 +10,7 @@ Example::
     poetry run python examples/run_llm_agent.py \\
         --attempts 3 --epochs 3 --model gpt-4o-mini
 
-Each attempt runs a full training cycle under an LLM-driven decision policy,
-then runs the judge. Between attempts, the next attempt's system prompt is
-augmented with the prior attempts' scores and violation list. Weights are
-never fine-tuned — this is test-time iterative self-refine, not RL.
+See ``src/env_rl/harness/__init__.py`` for why this is explicitly NOT RL.
 """
 
 from __future__ import annotations
@@ -154,9 +155,12 @@ def main() -> None:
         base_dir=base_dir,
     )
 
+    from env_rl.harness import HARNESS_MODE
+
     print(
         json.dumps(
             {
+                "mode": HARNESS_MODE,  # iterative_self_refine — NOT reinforcement learning
                 "best_attempt": result.best.index,
                 "best_scores": {
                     "accuracy_score": result.best.scores.accuracy_score,

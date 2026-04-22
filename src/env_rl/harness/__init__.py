@@ -1,11 +1,23 @@
-"""In-context iterative improvement harness.
+"""Iterative Self-Refine harness for the env_rl environment.
 
-Plugs a real LLM (OpenAI-compatible) into the environment as the
-decision-maker for rule firings. "Learning" happens by replaying prior
-attempts' scores and violations into the next attempt's system prompt —
-model weights never change. Documented precisely as *iterative self-refine*,
-not RL.
+This harness is **Iterative Self-Refine** (Madaan et al., 2023) — NOT
+reinforcement learning. The distinction matters and is enforced throughout
+this module:
+
+  - Model weights NEVER change. There is no gradient, no optimizer, no policy
+    update rule. The same OpenAI model is called in every attempt.
+  - "Learning" is entirely in-prompt. After each attempt, the next attempt's
+    system prompt is augmented with the prior attempts' scores and violations.
+  - Each OpenAI conversation is independent. Nothing persists across attempts
+    except what the harness explicitly injects into the prompt.
+
+If you later want actual RL (per-decision reward, DPO/PPO on weights you
+control), that is a separate feature that would live under ``src/env_rl/rl/``.
+This module will never do that.
 """
+
+#: Identifier used in logs and scripts to make the mode unambiguous.
+HARNESS_MODE: str = "iterative_self_refine"
 
 from env_rl.harness.policy import (
     Decision,
@@ -26,6 +38,7 @@ __all__ = [
     "DECISION_SCHEMA",
     "Decision",
     "DecisionPolicy",
+    "HARNESS_MODE",
     "OpenAIDecisionPolicy",
     "ScriptedDecisionPolicy",
     "build_decision_messages",

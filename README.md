@@ -124,10 +124,17 @@ diagnostic state and returns a structured decision (`event_type`, `cites`,
 next attempt's system prompt carries the prior attempts' scores and violation
 list.
 
-**This is iterative self-refine, not RL.** Model weights never change — all
-"learning" lives in the prompt and is discarded when the conversation ends.
-See README section "Scoring" for why, and `Project env rl.md` §12 for the
-denominator-gaming caveat.
+> **⚠ This is Iterative Self-Refine, not reinforcement learning.**
+>
+> Model weights never change. All "learning" lives in the prompt and is
+> discarded when the conversation ends. The module banner in
+> `src/env_rl/harness/__init__.py` spells out the distinction and every
+> user-facing artifact (summary JSON, CLI output) is tagged
+> `"mode": "iterative_self_refine"`.
+
+**Full step-by-step setup guide:** [`docs/setup-llm.md`](docs/setup-llm.md) —
+API key, model choice, synthetic smoke test, real CIFAR-10 run, how to
+inspect what the LLM actually saw and decided, and common pitfalls.
 
 ```bash
 export OPENAI_API_KEY=sk-...

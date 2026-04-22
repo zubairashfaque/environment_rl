@@ -1,11 +1,12 @@
-"""Multi-attempt driver: in-context iterative improvement.
+"""Iterative Self-Refine multi-attempt driver (NOT reinforcement learning).
 
 Runs the training + judging pipeline N times. After each attempt, collects
 the scores and violation list and feeds them into the next attempt's system
 prompt. Returns the best attempt by (process_score, accuracy_score).
 
-This is NOT reinforcement learning — model weights never change. It is
-inference-time iterative self-refine. Labeled as such throughout the code.
+Explicitly NOT RL. Weights never change. See ``env_rl.harness.__init__`` for
+the distinction. Every user-facing artifact this module produces (summary
+files, CLI output) is labeled with ``mode = "iterative_self_refine"``.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from env_rl.harness import HARNESS_MODE
 from env_rl.harness.policy import OpenAIDecisionPolicy
 from env_rl.harness.prompt import AttemptSummary
 from env_rl.judge import run_judge
@@ -124,6 +126,8 @@ def run_iterative(
         (base_dir / f"attempt_{i:02d}" / "summary.json").write_text(
             json.dumps(
                 {
+                    "mode": HARNESS_MODE,  # iterative_self_refine — NOT reinforcement learning
+                    "attempt_index": i,
                     "scores": asdict(scores),
                     "summary": {
                         "accuracy_score": summary.accuracy_score,
