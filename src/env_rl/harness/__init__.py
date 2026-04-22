@@ -19,16 +19,22 @@ This module will never do that.
 #: Identifier used in logs and scripts to make the mode unambiguous.
 HARNESS_MODE: str = "iterative_self_refine"
 
-#: Rules the harness physically cannot action. The judge treats these as
-#: advisory — firings do not require a matching decision and deferrals of
-#: them do not need to clear.
+#: Rules the harness physically cannot action (shrinks over time as more
+#: remedies get implemented). The judge treats these as advisory — firings
+#: do not require a matching decision and deferrals of them do not need to
+#: clear.
 #:
-#:   R1, R5, R7 are ACTIVE — harness applies lr_new (R1/R7) and swap_activation (R5).
-#:   R2  batch_size change: not supported (would require rebuilding DataLoader mid-run)
-#:   R3  early stopping:    not supported (harness always runs to max_epochs)
-#:   R4  add_block:         not supported (would require optimizer param-group rebuild)
-#:   R6  add_bn / add_residual: not supported (can't retrofit structure safely)
-HARNESS_WAIVED_RULES: frozenset[str] = frozenset({"R2", "R3", "R4", "R6"})
+#:   ACTIVE (must be actioned correctly):
+#:     R1  learning rate  → harness applies lr_new to every param group
+#:     R3  early stopping → remedy_direction="stop" exits the epoch loop
+#:     R4  add_block      → harness appends a ResBlock and registers params
+#:     R5  swap_activation → harness swaps ReLU/LeakyReLU/GELU in place
+#:     R7  exploding       → same code path as R1 (LR drop)
+#:
+#:   WAIVED (still — pending implementation):
+#:     R2  batch_size change     → DataLoader rebuild not wired up yet
+#:     R6  add_bn / add_residual → shape-changing retrofit not safe mid-run
+HARNESS_WAIVED_RULES: frozenset[str] = frozenset({"R2", "R6"})
 
 from env_rl.harness.policy import (
     Decision,

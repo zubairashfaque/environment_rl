@@ -64,7 +64,7 @@ DECISION_SCHEMA: dict[str, Any] = {
                 "lr_new": {"type": "number"},
                 "edit_op": {
                     "type": "string",
-                    "enum": ["swap_activation", "none"],
+                    "enum": ["swap_activation", "add_block", "remove_block", "none"],
                 },
                 "edit_to": {
                     "type": "string",
@@ -127,26 +127,30 @@ Hard rules (violations lose process score, but they are caught):
     lr_new to the CURRENT lr. For actions that are not architecture changes,
     set edit_op to "none" and edit_to to "none".
 
-  HARNESS CAPABILITIES (important — the harness is the thing executing your
-  decisions; rules it can't execute are waived by the judge):
-    ACTIVE  R1 (LR change)     → emit hyperparameter_change with lr_new
-    ACTIVE  R5 (activations)   → emit architecture_change with
+  HARNESS CAPABILITIES (the harness is the thing executing your decisions
+  — every rule below is now fully actionable; every violation costs you):
+    ACTIVE  R1 (LR change)     → hyperparameter_change with lr_new
+    ACTIVE  R3 (early stop)    → hyperparameter_change with
+                                  remedy_direction="stop" — the training
+                                  loop exits cleanly, best checkpoint saved
+    ACTIVE  R4 (add capacity)  → architecture_change with
+                                  edit_op="add_block" — a fresh ResBlock is
+                                  appended and registered with the optimizer
+    ACTIVE  R5 (activations)   → architecture_change with
                                   edit_op="swap_activation", edit_to in
                                   {"leaky_relu", "gelu"}
-    ACTIVE  R7 (exploding)     → emit hyperparameter_change with lr_new (drop)
-    WAIVED  R2 (batch size)    → the harness cannot rebuild the DataLoader;
-                                  always use rule_triggered_no_action
-    WAIVED  R3 (early stop)    → the harness always runs to max_epochs;
-                                  always use rule_triggered_no_action
-    WAIVED  R4 (add capacity)  → add_block is not supported; always use
-                                  rule_triggered_no_action
-    WAIVED  R6 (vanishing)     → adding BN/residual mid-run is not supported;
-                                  use rule_triggered_no_action (LR warmup
-                                  via R1/R7 can help indirectly)
+    ACTIVE  R7 (exploding)     → hyperparameter_change with lr_new (drop)
 
-  Waived rules are not counted against the process score. Active rules
-  still must be actioned correctly — skipping them or applying the wrong
-  remedy direction costs you.
+    WAIVED (still) R2 (batch size) → DataLoader rebuild not implemented yet;
+                                      prefer rule_triggered_no_action with
+                                      justification "waited_for_loader_support"
+    WAIVED (still) R6 (vanishing)  → BN/residual retrofit not implemented yet;
+                                      prefer rule_triggered_no_action with
+                                      justification "waited_for_bn_support"
+
+  Every active rule firing must produce a matching decision within the
+  ±2-epoch window; deferrals must eventually clear; the wrong remedy
+  direction is a process violation.
   - Justification should be concise (under 40 words) and cite the relevant
     diagnostic signal (e.g., "max_layer_grad_norm EMA 14.2 over 3 epochs").
   - `rule_triggered_no_action` is a deliberate deferral. Only use it when you

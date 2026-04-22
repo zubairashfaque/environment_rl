@@ -190,6 +190,8 @@ def run_reference(
     current_lr = cfg.lr
     current_batch_size = cfg.batch_size
     current_activation = cfg.activation
+    current_num_blocks = cfg.num_blocks
+    early_stop_requested = False
     best_val_acc = 0.0
     best_state = None
     train_loader_list = list(train_loader)
@@ -277,15 +279,29 @@ def run_reference(
                         decision.remedy_params = {}
                     else:
                         try:
-                            apply_edit_in_place(model, edit)
+                            apply_edit_in_place(model, edit, optimizer=optim)
                             if op == "swap_activation":
                                 current_activation = str(edit.get("to", current_activation)).lower()
+                            elif op == "add_block":
+                                current_num_blocks += 1
+                            elif op == "remove_block":
+                                current_num_blocks = max(1, current_num_blocks - 1)
                         except ValueError:
                             decision.event_type = "rule_triggered_no_action"
                             decision.justification = (
                                 f"edit {op!r} failed to apply for {top}; deferring"
                             )
                             decision.remedy_params = {}
+
+                # R3 early-stop handling: when the LLM asks to stop (and R3
+                # was the fired rule), set a flag to break out of the epoch
+                # loop cleanly after the current epoch.
+                if (
+                    decision.event_type == "hyperparameter_change"
+                    and decision.remedy_direction == "stop"
+                    and "R3" in decision.cites
+                ):
+                    early_stop_requested = True
                 monitor.log_decision(**decision.to_log_kwargs())
                 _trace({
                     "kind": "decision",
@@ -331,6 +347,11 @@ def run_reference(
             best_val_acc = float(metrics["val_acc"])
             best_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
 
+        if early_stop_requested:
+            _trace({"kind": "early_stop", "epoch": epoch,
+                    "best_val_acc": best_val_acc})
+            break
+
     monitor.end_session()
     _trace({"kind": "session_end", "best_val_acc": best_val_acc})
 
@@ -339,7 +360,9 @@ def run_reference(
         best_state = model.state_dict()
     torch.save(best_state, workspace / "best_model.pt")
 
-    (workspace / "model.py").write_text(_model_py_source(cfg, activation=current_activation))
+    (workspace / "model.py").write_text(
+        _model_py_source(cfg, activation=current_activation, num_blocks=current_num_blocks)
+    )
     (workspace / "run_config.json").write_text(
         json.dumps(
             {
@@ -362,16 +385,23 @@ def run_reference(
     }
 
 
-def _model_py_source(cfg: ReferenceRunConfig, *, activation: str | None = None) -> str:
-    # Always use the FINAL activation (after any swaps) so load_model() returns
-    # a model whose spec() matches the judge's architecture replay.
+def _model_py_source(
+    cfg: ReferenceRunConfig,
+    *,
+    activation: str | None = None,
+    num_blocks: int | None = None,
+) -> str:
+    # Always use the FINAL activation + num_blocks (after any swaps or
+    # add_block / remove_block edits) so load_model() returns a model whose
+    # spec() matches the judge's architecture replay.
     act = activation if activation is not None else cfg.activation
+    nb = num_blocks if num_blocks is not None else cfg.num_blocks
     return (
         "import torch\n"
         "from env_rl.agent.model import ResidualCNN\n"
         "\n"
         "def load_model():\n"
-        f"    m = ResidualCNN(num_blocks={cfg.num_blocks}, "
+        f"    m = ResidualCNN(num_blocks={nb}, "
         f"base_channels={cfg.base_channels}, "
         f"activation={act!r}, "
         f"bn_enabled={cfg.bn_enabled})\n"
