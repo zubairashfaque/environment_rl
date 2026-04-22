@@ -68,7 +68,8 @@ def main() -> None:
         help="Use synthetic random tensors (no CIFAR-10 download).",
     )
     parser.add_argument("--data-dir", default="./data/cifar10")
-    parser.add_argument("--manifest", default=None)
+    parser.add_argument("--manifest", default="./data/cifar10/splits.json",
+                        help="Path to splits.json (default: ./data/cifar10/splits.json)")
     args = parser.parse_args()
 
     if not os.environ.get("OPENAI_API_KEY"):
