@@ -125,12 +125,7 @@ def test_r3_stop_flag_gets_set_when_decision_matches() -> None:
     assert flag is False
 
 
-@pytest.mark.integration
-def test_r4_un_waived_means_unresolved_r4_deferrals_now_count() -> None:
-    """With R4 no longer waived, deferrals of R4 must clear — otherwise
-    they count against the process score."""
+def test_all_rules_un_waived_after_stages_1_to_5() -> None:
+    """After Stages 1-5 of the un-waiving plan, no rule is waived anymore."""
     from env_rl.harness import HARNESS_WAIVED_RULES
-    assert "R4" not in HARNESS_WAIVED_RULES
-    assert "R3" not in HARNESS_WAIVED_RULES
-    assert "R2" in HARNESS_WAIVED_RULES
-    assert "R6" in HARNESS_WAIVED_RULES
+    assert HARNESS_WAIVED_RULES == frozenset()

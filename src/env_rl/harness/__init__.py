@@ -26,15 +26,16 @@ HARNESS_MODE: str = "iterative_self_refine"
 #:
 #:   ACTIVE (must be actioned correctly):
 #:     R1  learning rate  → harness applies lr_new to every param group
+#:     R2  batch_size     → if make_train_loader factory is provided, harness
+#:                          rebuilds the DataLoader at 2× or 0.5× batch_size
+#:                          (falls back to deferral if no factory)
 #:     R3  early stopping → remedy_direction="stop" exits the epoch loop
 #:     R4  add_block      → harness appends a ResBlock and registers params
 #:     R5  swap_activation → harness swaps ReLU/LeakyReLU/GELU in place
-#:     R7  exploding       → same code path as R1 (LR drop)
-#:
-#:   WAIVED (still — pending implementation):
-#:     R2  batch_size change     → DataLoader rebuild not wired up yet
-#:     R6  add_bn / add_residual → shape-changing retrofit not safe mid-run
-HARNESS_WAIVED_RULES: frozenset[str] = frozenset({"R2", "R6"})
+#:     R6  vanishing      → actioned via hyperparameter_change with lr_new
+#:                          per playbook's "LR warmup can help indirectly"
+#:     R7  exploding      → same code path as R1 (LR drop)
+HARNESS_WAIVED_RULES: frozenset[str] = frozenset()
 
 from env_rl.harness.policy import (
     Decision,

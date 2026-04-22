@@ -125,6 +125,7 @@ def run_reference(
     *,
     policy: Any = None,
     training_trace_path: Any = None,
+    make_train_loader: Any = None,
 ) -> dict[str, Any]:
     """Run the reference training loop. Returns final summary dict.
 
@@ -302,6 +303,38 @@ def run_reference(
                     and "R3" in decision.cites
                 ):
                     early_stop_requested = True
+
+                # R2 batch-size handling: rebuild the train loader if the
+                # policy asked for a bigger/smaller batch and a loader
+                # factory was provided.
+                if (
+                    decision.event_type == "hyperparameter_change"
+                    and decision.remedy_direction in ("increase_batch_size", "decrease_batch_size")
+                    and make_train_loader is not None
+                    and "R2" in decision.cites
+                ):
+                    factor = 2 if decision.remedy_direction == "increase_batch_size" else 0.5
+                    new_bs = max(8, int(current_batch_size * factor))
+                    if new_bs != current_batch_size:
+                        try:
+                            train_loader_list = list(make_train_loader(new_bs))
+                            current_batch_size = new_bs
+                            # Reset optimizer momentum buffers on batch-size change
+                            optim.state = {}
+                            _trace({
+                                "kind": "remedy_applied",
+                                "epoch": epoch,
+                                "change": "batch_size",
+                                "from": current_batch_size // factor if factor else current_batch_size,
+                                "to": new_bs,
+                            })
+                        except Exception as e:
+                            # If loader rebuild fails, downgrade to deferral
+                            decision.event_type = "rule_triggered_no_action"
+                            decision.justification = (
+                                f"batch-size rebuild failed ({type(e).__name__}); deferring R2"
+                            )
+                            decision.remedy_params = {}
                 monitor.log_decision(**decision.to_log_kwargs())
                 _trace({
                     "kind": "decision",

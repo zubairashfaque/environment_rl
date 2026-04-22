@@ -23,6 +23,10 @@ from env_rl.harness.prompt import (
     AttemptSummary,
     build_iterative_system_prompt,
 )
+
+
+def _build_initial_prompt(prior_attempts: list) -> str:
+    return build_iterative_system_prompt(prior_attempts=prior_attempts)
 from env_rl.judge import run_judge
 from env_rl.judge.coverage import Violation, audit_rule_coverage
 from env_rl.judge.defensibility import DefensibilityFailure, audit_defensibility
@@ -84,16 +88,26 @@ def run_iterative(
     run_one_attempt: Callable[[OpenAIDecisionPolicy, Path, Path], Scores],
     base_dir: Path,
     waived_rules: frozenset[str] | set[str] | None = None,
+    meta_loop: bool = False,
 ) -> IterativeResult:
     """Run ``attempts`` full training+judge cycles; accumulate feedback.
 
     ``run_one_attempt(policy, workspace, judge_logs) -> Scores`` is the injected
     do-one-run function. Swapped in by the CLI (real) and tests (fake).
+
+    If ``meta_loop=True``, after each attempt a Tuner→Tester→Judge cycle
+    proposes a prompt edit, evaluates it on the scenario suite, and promotes
+    the winner — so the prompt evolves across attempts beyond just injecting
+    prior-attempt feedback.
     """
     base_dir = Path(base_dir)
     base_dir.mkdir(parents=True, exist_ok=True)
     prior: list[AttemptSummary] = []
     all_attempts: list[AttemptResult] = []
+
+    # Optional meta-loop (Tuner/Tester/Judge) — initialised lazily with the
+    # initial (prior-free) system prompt on the first attempt.
+    ml = None  # type: ignore[assignment]
 
     for i in range(1, attempts + 1):
         # ensure a fully clean session between attempts
@@ -138,17 +152,43 @@ def run_iterative(
             json.dumps(feedback_record, indent=2)
         )
 
+        # If meta-loop is active, the champion prompt replaces the normal
+        # system prompt (prior-attempt feedback still gets appended on top
+        # via the usual OpenAIDecisionPolicy constructor — except when
+        # meta_loop is on, the champion is itself already an evolved prompt
+        # so we pass it directly).
+        if meta_loop:
+            from env_rl.harness.prompt_tuning.meta_loop import MetaLoop
+            if ml is None:
+                base_initial = _build_initial_prompt(prior_attempts=[])
+                ml = MetaLoop(
+                    base_dir=base_dir,
+                    initial_prompt=base_initial,
+                    tester_client=client,
+                    tester_model=model_name,
+                )
+            system_prompt_override = ml.champion_prompt
+        else:
+            system_prompt_override = None
+
         policy = OpenAIDecisionPolicy(
             client=client,
             model=model_name,
             prior_attempts=prior,
             temperature=temperature,
             transcript_path=attempt_dir / "llm_transcript.jsonl",
+            system_prompt=system_prompt_override,
         )
 
         scores = run_one_attempt(policy, workspace, judge_logs)
         coverage, defensibility = _collect_violations(judge_logs, waived_rules=waived_rules)
         violations = _violations_to_summary(coverage, defensibility)
+
+        # Let the meta-loop propose and evaluate an edit based on this
+        # attempt's violations. The promoted champion becomes the starting
+        # point for the next attempt.
+        if meta_loop and ml is not None:
+            ml.step(attempt_index=i, violations=violations)
 
         summary = AttemptSummary(
             attempt_index=i,

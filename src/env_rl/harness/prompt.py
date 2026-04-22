@@ -127,30 +127,25 @@ Hard rules (violations lose process score, but they are caught):
     lr_new to the CURRENT lr. For actions that are not architecture changes,
     set edit_op to "none" and edit_to to "none".
 
-  HARNESS CAPABILITIES (the harness is the thing executing your decisions
-  — every rule below is now fully actionable; every violation costs you):
-    ACTIVE  R1 (LR change)     → hyperparameter_change with lr_new
-    ACTIVE  R3 (early stop)    → hyperparameter_change with
-                                  remedy_direction="stop" — the training
-                                  loop exits cleanly, best checkpoint saved
-    ACTIVE  R4 (add capacity)  → architecture_change with
-                                  edit_op="add_block" — a fresh ResBlock is
-                                  appended and registered with the optimizer
-    ACTIVE  R5 (activations)   → architecture_change with
-                                  edit_op="swap_activation", edit_to in
-                                  {"leaky_relu", "gelu"}
-    ACTIVE  R7 (exploding)     → hyperparameter_change with lr_new (drop)
+  HARNESS CAPABILITIES (every rule below is fully actionable; every
+  violation costs process score):
+    R1 (LR change)        → hyperparameter_change with lr_new
+    R2 (batch size)       → hyperparameter_change with
+                             remedy_direction="increase_batch_size" or
+                             "decrease_batch_size" (harness rebuilds loader)
+    R3 (early stop)       → hyperparameter_change with
+                             remedy_direction="stop" (loop exits cleanly)
+    R4 (add capacity)     → architecture_change with edit_op="add_block"
+    R5 (activations)      → architecture_change with
+                             edit_op="swap_activation", edit_to in
+                             {"leaky_relu", "gelu"}
+    R6 (vanishing grads)  → hyperparameter_change with lr_new (LR warmup
+                             helps vanishing gradients indirectly per playbook)
+    R7 (exploding)        → hyperparameter_change with lr_new (LR drop 10x)
 
-    WAIVED (still) R2 (batch size) → DataLoader rebuild not implemented yet;
-                                      prefer rule_triggered_no_action with
-                                      justification "waited_for_loader_support"
-    WAIVED (still) R6 (vanishing)  → BN/residual retrofit not implemented yet;
-                                      prefer rule_triggered_no_action with
-                                      justification "waited_for_bn_support"
-
-  Every active rule firing must produce a matching decision within the
-  ±2-epoch window; deferrals must eventually clear; the wrong remedy
-  direction is a process violation.
+  Every rule firing must produce a matching decision within the ±2-epoch
+  window; deferrals must eventually clear; the wrong remedy direction is
+  a process violation. No rule is waived.
   - Justification should be concise (under 40 words) and cite the relevant
     diagnostic signal (e.g., "max_layer_grad_norm EMA 14.2 over 3 epochs").
   - `rule_triggered_no_action` is a deliberate deferral. Only use it when you

@@ -67,6 +67,11 @@ def main() -> None:
         "--synthetic", action="store_true",
         help="Use synthetic random tensors (no CIFAR-10 download).",
     )
+    parser.add_argument(
+        "--meta-loop", action="store_true",
+        help="Enable Tuner/Tester/Judge prompt-evolution meta-loop "
+             "(prompts evolve across attempts, not just prior-attempt feedback).",
+    )
     parser.add_argument("--data-dir", default="./data/cifar10")
     parser.add_argument("--manifest", default="./data/cifar10/splits.json",
                         help="Path to splits.json (default: ./data/cifar10/splits.json)")
@@ -174,6 +179,7 @@ def main() -> None:
         run_one_attempt=run_one_attempt,
         base_dir=base_dir,
         waived_rules=HARNESS_WAIVED_RULES,
+        meta_loop=args.meta_loop,
     )
 
     from env_rl.harness import HARNESS_MODE
