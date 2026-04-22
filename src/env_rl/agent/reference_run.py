@@ -171,6 +171,7 @@ def run_reference(
 
     current_lr = cfg.lr
     current_batch_size = cfg.batch_size
+    current_activation = cfg.activation
     best_val_acc = 0.0
     best_state = None
     train_loader_list = list(train_loader)
@@ -244,6 +245,8 @@ def run_reference(
                     else:
                         try:
                             apply_edit_in_place(model, edit)
+                            if op == "swap_activation":
+                                current_activation = str(edit.get("to", current_activation)).lower()
                         except ValueError:
                             decision.event_type = "rule_triggered_no_action"
                             decision.justification = (
@@ -289,7 +292,7 @@ def run_reference(
         best_state = model.state_dict()
     torch.save(best_state, workspace / "best_model.pt")
 
-    (workspace / "model.py").write_text(_model_py_source(cfg))
+    (workspace / "model.py").write_text(_model_py_source(cfg, activation=current_activation))
     (workspace / "run_config.json").write_text(
         json.dumps(
             {
@@ -312,7 +315,10 @@ def run_reference(
     }
 
 
-def _model_py_source(cfg: ReferenceRunConfig) -> str:
+def _model_py_source(cfg: ReferenceRunConfig, *, activation: str | None = None) -> str:
+    # Always use the FINAL activation (after any swaps) so load_model() returns
+    # a model whose spec() matches the judge's architecture replay.
+    act = activation if activation is not None else cfg.activation
     return (
         "import torch\n"
         "from env_rl.agent.model import ResidualCNN\n"
@@ -320,7 +326,7 @@ def _model_py_source(cfg: ReferenceRunConfig) -> str:
         "def load_model():\n"
         f"    m = ResidualCNN(num_blocks={cfg.num_blocks}, "
         f"base_channels={cfg.base_channels}, "
-        f"activation={cfg.activation!r}, "
+        f"activation={act!r}, "
         f"bn_enabled={cfg.bn_enabled})\n"
         "    state = torch.load(str(__file__).rsplit('/', 1)[0] + '/best_model.pt')\n"
         "    m.load_state_dict(state)\n"
