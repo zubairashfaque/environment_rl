@@ -67,8 +67,16 @@ def audit_rule_coverage(
     decisions: Iterable[dict],
     *,
     epochs_total: int,
+    waived_rules: frozenset[str] | set[str] | None = None,
 ) -> list[Violation]:
-    """Return a list of process violations. Empty list = perfect coverage."""
+    """Return a list of process violations. Empty list = perfect coverage.
+
+    ``waived_rules`` is the set of rule IDs the harness cannot execute a
+    remedy for (e.g. R2 if the harness can't rebuild the DataLoader). Waived
+    rules are ignored by all checks: firings don't require decisions, their
+    deferrals don't need to clear, and they don't participate in precedence.
+    """
+    waived = frozenset(waived_rules or ())
     rule_evals = list(rule_evals)
     decisions = list(decisions)
     # normalize shape: each record is {epoch: int, evals: {R1..R7: bool}}
@@ -84,6 +92,8 @@ def audit_rule_coverage(
 
     # --- (a) every fire has a matching decision within window
     for rule in all_rule_ids:
+        if rule in waived:
+            continue  # waived rules: no decision required
         for epoch in _fired_epochs(rule_evals_norm, rule):
             dec = _find_matching_decision(decisions, rule, epoch)
             if dec is None:
@@ -122,6 +132,8 @@ def audit_rule_coverage(
             continue
         epoch = int(d["epoch"])
         for rule in d.get("cites", []):
+            if rule in waived:
+                continue  # waived rules don't need to clear
             cleared = any(
                 (int(r["epoch"]) > epoch) and (not r["evals"].get(rule))
                 for r in rule_evals_norm
@@ -138,9 +150,9 @@ def audit_rule_coverage(
 
     # --- (d) precedence: when multiple rules fire at the same epoch, the
     # decision in the window must address the highest-precedence class at
-    # least once.
+    # least once. Waived rules do not participate.
     for rec in rule_evals_norm:
-        fired = {r for r, v in rec["evals"].items() if v}
+        fired = {r for r, v in rec["evals"].items() if v and r not in waived}
         if len(fired) < 2:
             continue
         epoch = int(rec["epoch"])

@@ -46,10 +46,17 @@ class IterativeResult:
     all_attempts: list[AttemptResult]
 
 
-def _collect_violations(judge_logs: Path) -> tuple[list[Violation], list[DefensibilityFailure]]:
+def _collect_violations(
+    judge_logs: Path,
+    waived_rules: frozenset[str] | set[str] | None = None,
+) -> tuple[list[Violation], list[DefensibilityFailure]]:
     rule_evals = read_rule_eval_records(judge_logs / "rule_evaluations.jsonl")
     decisions = read_decision_records(judge_logs / "decision_log.jsonl")
-    coverage = audit_rule_coverage(rule_evals, decisions, epochs_total=len(rule_evals))
+    coverage = audit_rule_coverage(
+        rule_evals, decisions,
+        epochs_total=len(rule_evals),
+        waived_rules=waived_rules,
+    )
     defensibility = audit_defensibility(decisions, sample_size=10, seed=42)
     return coverage, defensibility
 
@@ -73,6 +80,7 @@ def run_iterative(
     temperature: float = 0.2,
     run_one_attempt: Callable[[OpenAIDecisionPolicy, Path, Path], Scores],
     base_dir: Path,
+    waived_rules: frozenset[str] | set[str] | None = None,
 ) -> IterativeResult:
     """Run ``attempts`` full training+judge cycles; accumulate feedback.
 
@@ -106,7 +114,7 @@ def run_iterative(
         )
 
         scores = run_one_attempt(policy, workspace, judge_logs)
-        coverage, defensibility = _collect_violations(judge_logs)
+        coverage, defensibility = _collect_violations(judge_logs, waived_rules=waived_rules)
         violations = _violations_to_summary(coverage, defensibility)
 
         summary = AttemptSummary(

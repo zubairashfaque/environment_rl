@@ -44,6 +44,7 @@ def run_judge(
     defensibility_sample_size: int = 10,
     defensibility_seed: int = 42,
     live_diag_tolerance: float = 0.30,
+    waived_rules: frozenset[str] | set[str] | None = None,
 ) -> Scores:
     """Run all 11 steps. Returns the two-axis Scores object."""
     workspace = Path(workspace)
@@ -90,7 +91,10 @@ def run_judge(
     rule_evals = read_rule_eval_records(rule_log)
     decisions = read_decision_records(decision_log)
     coverage_violations = audit_rule_coverage(
-        rule_evals, decisions, epochs_total=len(rule_evals)
+        rule_evals,
+        decisions,
+        epochs_total=len(rule_evals),
+        waived_rules=waived_rules,
     )
     # (9) defensibility sampling
     defensibility_failures = audit_defensibility(

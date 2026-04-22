@@ -26,6 +26,7 @@ from env_rl.agent.reference_run import (
     _make_synthetic_loader,
     run_reference,
 )
+from env_rl.harness import HARNESS_WAIVED_RULES
 from env_rl.harness.iterative import run_iterative
 from env_rl.judge import run_judge
 
@@ -144,6 +145,7 @@ def main() -> None:
             live_diag_batches=live_batches,
             initial_arch_spec={"num_blocks": 2, "activation": "relu", "bn_enabled": True},
             live_diag_tolerance=0.99 if args.synthetic else 0.50,
+            waived_rules=HARNESS_WAIVED_RULES,
         )
 
     result = run_iterative(
@@ -153,6 +155,7 @@ def main() -> None:
         temperature=args.temperature,
         run_one_attempt=run_one_attempt,
         base_dir=base_dir,
+        waived_rules=HARNESS_WAIVED_RULES,
     )
 
     from env_rl.harness import HARNESS_MODE
