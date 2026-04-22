@@ -162,6 +162,10 @@ class OpenAIDecisionPolicy:
         temperature: float = 0.2,
         system_prompt: str | None = None,
         transcript_path: Any = None,
+        enable_cache: bool = True,
+        enable_ensemble: bool = False,
+        ensemble_n_samples: int = 3,
+        ensemble_temperature: float = 0.7,
     ) -> None:
         self._client = client
         self._model = model
@@ -170,6 +174,16 @@ class OpenAIDecisionPolicy:
             prior_attempts or []
         )
         self._transcript_path = transcript_path
+
+        # Stage-6 integrations (wired in Stage 7+)
+        if enable_cache:
+            from env_rl.harness.decision_cache import DecisionCache
+            self._cache = DecisionCache()
+        else:
+            self._cache = None
+        self._enable_ensemble = enable_ensemble
+        self._ensemble_n_samples = ensemble_n_samples
+        self._ensemble_temperature = ensemble_temperature
         # Write the system prompt once at the top of the transcript so every
         # subsequent call record can stay small.
         if transcript_path is not None:
@@ -200,6 +214,23 @@ class OpenAIDecisionPolicy:
         current_batch_size: int,
         recent_history: list[dict[str, Any]],
     ) -> Decision:
+        # --- (A) Decision-cache hit check --------------------------------
+        cache_fp: str | None = None
+        if self._cache is not None:
+            from env_rl.harness.decision_cache import fingerprint
+            cache_fp = fingerprint(
+                top_rule=top_rule, all_fired=dict(all_fired),
+                current_lr=current_lr, current_batch_size=current_batch_size,
+            )
+            cached = self._cache.get(cache_fp)
+            if cached is not None:
+                self._write_transcript_entry(
+                    epoch=epoch, top_rule=top_rule, all_fired=all_fired,
+                    user_message="<cache_hit>", response=None,
+                    usage={}, cache_hit=True, ensemble=False, agreement=1.0,
+                )
+                return cached
+
         messages = build_decision_messages(
             system_prompt=self._system_prompt,
             epoch=epoch,
@@ -210,45 +241,108 @@ class OpenAIDecisionPolicy:
             current_batch_size=current_batch_size,
             recent_history=recent_history,
         )
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "decision", "strict": True, "schema": DECISION_SCHEMA,
+            },
+        }
+
+        # --- (B) Ensemble voting for stability-class rules ---------------
+        use_ensemble = False
+        agreement = 1.0
+        if self._enable_ensemble:
+            from env_rl.harness.ensemble import ensemble_decide, should_ensemble
+            if should_ensemble(top_rule):
+                use_ensemble = True
+                er = ensemble_decide(
+                    client=self._client, model=self._model, messages=messages,
+                    json_schema_response_format=response_format,
+                    n_samples=self._ensemble_n_samples,
+                    temperature=self._ensemble_temperature,
+                )
+                raw = json.dumps(er.majority_decision)
+                agreement = er.agreement
+                usage: dict[str, Any] = {}
+                self._write_transcript_entry(
+                    epoch=epoch, top_rule=top_rule, all_fired=all_fired,
+                    user_message=messages[1]["content"], response=raw,
+                    usage=usage, cache_hit=False, ensemble=True, agreement=agreement,
+                )
+                data = er.majority_decision
+                decision = _decision_from_dict(
+                    data, top_rule=top_rule, current_lr=current_lr,
+                )
+                if self._cache is not None and cache_fp is not None:
+                    self._cache.put(cache_fp, decision)
+                return decision
+
+        # --- Standard single-sample call --------------------------------
         response = self._client.chat.completions.create(
             model=self._model,
             messages=messages,
             temperature=self._temperature,
-            response_format={
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "decision",
-                    "strict": True,
-                    "schema": DECISION_SCHEMA,
-                },
-            },
+            response_format=response_format,
         )
         raw = response.choices[0].message.content
-        if self._transcript_path is not None:
-            from pathlib import Path as _Path
-            p = _Path(self._transcript_path)
-            # Extract usage if the SDK provided it (openai >= 1.0)
-            usage: dict[str, Any] = {}
-            u = getattr(response, "usage", None)
-            if u is not None:
-                usage = {
-                    "prompt_tokens": int(getattr(u, "prompt_tokens", 0) or 0),
-                    "completion_tokens": int(getattr(u, "completion_tokens", 0) or 0),
-                    "total_tokens": int(getattr(u, "total_tokens", 0) or 0),
-                }
-            with open(p, "a", encoding="utf-8") as f:
-                f.write(json.dumps({
-                    "kind": "call",
-                    "epoch": epoch,
-                    "top_rule": top_rule,
-                    "all_fired": {k: bool(v) for k, v in all_fired.items()},
-                    "user_message": messages[1]["content"],
-                    "response": raw,
-                    "usage": usage,
-                    "model": self._model,
-                }) + "\n")
+        usage: dict[str, Any] = {}
+        u = getattr(response, "usage", None)
+        if u is not None:
+            usage = {
+                "prompt_tokens": int(getattr(u, "prompt_tokens", 0) or 0),
+                "completion_tokens": int(getattr(u, "completion_tokens", 0) or 0),
+                "total_tokens": int(getattr(u, "total_tokens", 0) or 0),
+            }
+        self._write_transcript_entry(
+            epoch=epoch, top_rule=top_rule, all_fired=all_fired,
+            user_message=messages[1]["content"], response=raw,
+            usage=usage, cache_hit=False, ensemble=False, agreement=1.0,
+        )
         data = json.loads(raw)
-        return _decision_from_dict(data, top_rule=top_rule, current_lr=current_lr)
+        decision = _decision_from_dict(
+            data, top_rule=top_rule, current_lr=current_lr,
+        )
+        if self._cache is not None and cache_fp is not None:
+            self._cache.put(cache_fp, decision)
+        return decision
+
+    def _write_transcript_entry(
+        self,
+        *,
+        epoch: int,
+        top_rule: str,
+        all_fired: dict[str, bool],
+        user_message: str,
+        response: str | None,
+        usage: dict[str, Any],
+        cache_hit: bool,
+        ensemble: bool,
+        agreement: float,
+    ) -> None:
+        if self._transcript_path is None:
+            return
+        from pathlib import Path as _Path
+        p = _Path(self._transcript_path)
+        with open(p, "a", encoding="utf-8") as f:
+            f.write(json.dumps({
+                "kind": "call",
+                "epoch": epoch,
+                "top_rule": top_rule,
+                "all_fired": {k: bool(v) for k, v in all_fired.items()},
+                "user_message": user_message,
+                "response": response,
+                "usage": usage,
+                "model": self._model,
+                "cache_hit": cache_hit,
+                "ensemble": ensemble,
+                "agreement": agreement,
+            }) + "\n")
+
+    @property
+    def cache_stats(self) -> dict:
+        if self._cache is None:
+            return {"enabled": False}
+        return {"enabled": True, **self._cache.stats}
 
 
 def _decision_from_dict(

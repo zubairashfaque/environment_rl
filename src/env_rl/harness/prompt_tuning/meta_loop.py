@@ -63,6 +63,7 @@ class MetaLoop:
         tester_model: str = "gpt-4o-mini",
         tuner: PromptTuner | None = None,
         judge: PromptJudge | None = None,
+        scoreboard: Any = None,
     ) -> None:
         self._base_dir = Path(base_dir)
         self._prompts_dir = self._base_dir / "prompts"
@@ -70,6 +71,12 @@ class MetaLoop:
         self._tuner = tuner or PromptTuner()
         self._tester = PromptTester(client=tester_client, model=tester_model)
         self._judge = judge or PromptJudge()
+        if scoreboard is None:
+            from env_rl.harness.prompt_tuning.scoreboard import TechniqueScoreboard
+            scoreboard = TechniqueScoreboard(
+                path=self._base_dir / ".scoreboard.json"
+            )
+        self._scoreboard = scoreboard
 
         self._versions: list[PromptVersion] = []
         self._iterations: list[MetaLoopIteration] = []
@@ -142,6 +149,16 @@ class MetaLoop:
             self._champion_version = new_version
             self._champion_results = new_results
 
+        # Record technique outcome in the scoreboard
+        outcome = (
+            "win" if verdict.winner == "new"
+            else ("loss" if verdict.winner == "old" else "tie")
+        )
+        try:
+            self._scoreboard.record(edit.technique, outcome)
+        except Exception:  # noqa: BLE001
+            pass  # scoreboard is informational; never let it crash the run
+
         it = MetaLoopIteration(
             attempt_index=attempt_index,
             proposed_edit_technique=edit.technique,
@@ -207,7 +224,12 @@ class MetaLoop:
             "champion_version": self._champion_version,
             "versions": [asdict(v) for v in self._versions],
             "iterations": [asdict(i) for i in self._iterations],
+            "scoreboard": self._scoreboard.summary(),
         }
         (self._base_dir / "meta_loop_log.json").write_text(
             json.dumps(log, indent=2)
         )
+
+    @property
+    def scoreboard_summary(self) -> dict:
+        return self._scoreboard.summary()
