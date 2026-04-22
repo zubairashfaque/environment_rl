@@ -319,6 +319,100 @@ No API key needed. This is what the plan calls "a scripted demonstrator that pro
 
 ---
 
+## A Real Run, Narrated — Three Acts on CIFAR-10
+
+This is the raw story of one real run, extracted verbatim from `llm_runs_real/attempt_01/training_trace.jsonl`:
+
+```bash
+poetry run python examples/run_llm_agent.py \
+    --attempts 1 --epochs 20 --batch-size 128 --lr 0.05 \
+    --model gpt-4o-mini --target-acc 0.70 --base-dir llm_runs_real
+```
+
+**Final scores:** `test_accuracy=0.627`, `accuracy_score=0.895`, `process_score=0.627` (19 violations / 51 decisions, no hard fails).
+
+### Act I — Half-Dead on Arrival (epochs 0–1)
+
+The CNN starts with ReLU activations. First forward pass: **53% of neurons are already dead**. By epoch 1, dead fraction is **59%**. Half the model cannot send a gradient back through itself.
+
+No rule fires yet — the playbook requires three consecutive epochs of evidence. The monitor has a concern but is still gathering proof.
+
+Train/val accuracy is rising anyway (35% → 48%, 39% → 47%). The half that is alive is doing the work of the whole.
+
+### Act II — The Verdict and the Reanimation (epochs 2–5)
+
+At **epoch 2**, three rules fire at once:
+
+- **R1** (update-to-param ratio out of band)
+- **R2** (gradient noise scale too low)
+- **R5** (dead-ReLU fraction above 40% for 3 consecutive epochs)
+
+Precedence is `stability > capacity > tuning > process`. R5 is capacity, R1 and R2 are tuning. The LLM picks R5. Its justification, verbatim:
+
+> *"Dead-ReLU fraction exceeds 0.40 for 3 consecutive epochs, indicating many neurons are stuck at zero."*
+
+The decision: `architecture_change` → swap all ReLU to LeakyReLU. The harness applies it in place. R1 and R2 are deferred with `"deferred_to_R5"`.
+
+**One epoch later, dead-ReLU fraction is 0%.** LeakyReLU cannot produce exactly-zero outputs, so every neuron comes back alive. The EMA smoother keeps R5 "firing" for two more epochs — during those the LLM keeps issuing the same (now idempotent) swap. Honest behavior, reasoning correctly from what the smoothed signal still shows.
+
+### Act III — The Capacity Wall (epochs 6–19)
+
+At **epoch 6**, R4 (depth/capacity) fires for the first time. Train-acc growth has slowed below the saturation gap. The LLM reads the playbook: **add a residual block**.
+
+But `add_block` is not in the reference harness's executable set — it would require rebuilding the optimizer's parameter groups mid-training. So the harness **downgrades** the decision from `architecture_change` to `rule_triggered_no_action` with the justification `"harness does not execute edit 'none'; deferring R4"`.
+
+Over the next **14 epochs** the LLM keeps defering R4 honestly. Val accuracy climbs to **0.606 at epoch 15** and the run ends at **test_accuracy = 0.627**.
+
+### The Climb — Accuracy over 20 epochs
+
+```mermaid
+xychart-beta
+    title "Train vs Val Accuracy (%)"
+    x-axis [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]
+    y-axis "Accuracy %" 30 --> 70
+    line [34.9, 47.8, 55.0, 58.0, 59.9, 61.1, 62.1, 62.8, 63.8, 64.1, 65.0, 65.4, 65.7, 66.0, 66.3, 66.5, 66.8, 67.1, 67.1, 67.4]
+    line [39.3, 47.2, 47.9, 49.2, 51.6, 48.1, 51.7, 54.2, 55.5, 59.3, 57.3, 57.0, 57.3, 57.0, 60.2, 60.6, 57.6, 53.4, 55.5, 57.6]
+```
+
+### The Cliff — Dead-ReLU Fraction Collapse at Epoch 4
+
+```mermaid
+xychart-beta
+    title "Dead-ReLU Fraction (%)"
+    x-axis [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]
+    y-axis "% dead" 0 --> 80
+    bar [53, 59, 68, 72, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+```
+
+### Rule-firing heatmap
+
+`✅ actioned · ❌ missed · 🟠 deferred, unresolved · 🔵 deferred, waived · · not fired`
+
+| Rule | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| R1 LR | · | · | 🟠 | 🟠 | 🟠 | 🟠 | 🟠 | 🟠 | 🟠 | 🟠 | 🟠 | 🟠 | 🟠 | 🟠 | 🟠 | 🟠 | 🟠 | 🟠 | 🟠 | 🟠 |
+| R2 batch | · | · | 🔵 | 🔵 | 🔵 | 🔵 | 🔵 | 🔵 | 🔵 | 🔵 | 🔵 | 🔵 | 🔵 | 🔵 | 🔵 | 🔵 | · | · | · | · |
+| R3 early-stop | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · |
+| R4 depth | · | · | · | · | · | · | 🔵 | 🔵 | 🔵 | 🔵 | 🔵 | 🔵 | 🔵 | 🔵 | 🔵 | 🔵 | 🔵 | 🔵 | 🔵 | 🔵 |
+| R5 activations | · | · | ✅ | ✅ | ✅ | ✅ | ❌ | · | · | · | · | · | · | · | · | · | · | · | · | · |
+| R6 vanishing | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · |
+| R7 exploding | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · | · |
+
+### Why `process_score` is 0.627
+
+18 × `unresolved_deferral` for R1 (fired every epoch 2–19, never actioned because a higher-precedence rule kept winning) + 1 × `precedence_violation` at epoch 6 (R5 still EMA-flagged when R4 fired; tie-breaker says R5 should have been addressed). Two of those are avoidable with a more patient decision strategy — drop the deferral of R1 once R5 has clearly cleared, or have the LLM action R1 after a few epochs of R4 deferral.
+
+### The Narrative Value
+
+A benchmark that measured **only accuracy** would give this run full marks. A benchmark that measured **only process** would miss that the model genuinely learned. Env-RL reports **both**, independently — and the gap between them is itself the story: the LLM trained a competent CIFAR-10 classifier, and it also left one rule (R1) chronically unacted throughout the run. If you wanted to improve this run further, you would not change the model — you would change the *decision-making*.
+
+Want to see more? Open the full trace with:
+```bash
+poetry run python examples/show_full_run.py llm_runs_real/attempt_01
+```
+
+---
+
 ## Per-attempt output files — what everything means
 
 Every attempt creates a folder `llm_runs/attempt_NN/` with nine artifacts:
