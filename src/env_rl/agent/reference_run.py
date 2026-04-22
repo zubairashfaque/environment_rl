@@ -227,30 +227,29 @@ def run_reference(
                     recent_history=metrics_history,
                 )
                 # If the LLM proposed an architecture edit, try to apply it.
-                # Unsupported edits are downgraded to rule_triggered_no_action
-                # to keep the log and the model consistent (judge step 6).
+                # Unsupported or no-op edits are downgraded to
+                # rule_triggered_no_action so the log never claims an edit
+                # happened when none did (judge step 6 invariant).
                 if decision.event_type == "architecture_change":
                     from env_rl.harness.edits import apply_edit_in_place, is_supported
                     edit = decision.remedy_params.get("edit") or {}
-                    if is_supported(edit):
+                    op = edit.get("op", "none") if edit else "none"
+                    if op == "none" or not is_supported(edit):
+                        decision.event_type = "rule_triggered_no_action"
+                        decision.justification = (
+                            f"harness does not execute edit {op!r}; "
+                            f"deferring {top} (run longer or action an LR remedy)"
+                        )
+                        decision.remedy_params = {}
+                    else:
                         try:
                             apply_edit_in_place(model, edit)
-                            # Rebuild optimizer param groups (activation swap
-                            # creates new modules with no trainable params
-                            # but hooks are still attached — safe as-is).
                         except ValueError:
                             decision.event_type = "rule_triggered_no_action"
                             decision.justification = (
-                                f"unsupported edit for {top}; deferring"
+                                f"edit {op!r} failed to apply for {top}; deferring"
                             )
                             decision.remedy_params = {}
-                    else:
-                        decision.event_type = "rule_triggered_no_action"
-                        decision.justification = (
-                            f"harness does not execute edit {edit.get('op','?')}; "
-                            f"deferring {top}"
-                        )
-                        decision.remedy_params = {}
                 monitor.log_decision(**decision.to_log_kwargs())
                 # Apply remedy if the policy specified a new LR
                 lr_new = decision.remedy_params.get("lr_new")
