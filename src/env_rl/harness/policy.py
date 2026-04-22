@@ -161,6 +161,7 @@ class OpenAIDecisionPolicy:
         prior_attempts: list[AttemptSummary] | None = None,
         temperature: float = 0.2,
         system_prompt: str | None = None,
+        transcript_path: Any = None,
     ) -> None:
         self._client = client
         self._model = model
@@ -168,6 +169,21 @@ class OpenAIDecisionPolicy:
         self._system_prompt = system_prompt or build_iterative_system_prompt(
             prior_attempts or []
         )
+        self._transcript_path = transcript_path
+        # Write the system prompt once at the top of the transcript so every
+        # subsequent call record can stay small.
+        if transcript_path is not None:
+            import json as _json
+            from pathlib import Path as _Path
+            p = _Path(transcript_path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(_json.dumps({
+                    "kind": "system_prompt",
+                    "model": model,
+                    "temperature": temperature,
+                    "text": self._system_prompt,
+                }) + "\n")
 
     @property
     def system_prompt(self) -> str:
@@ -208,6 +224,18 @@ class OpenAIDecisionPolicy:
             },
         )
         raw = response.choices[0].message.content
+        if self._transcript_path is not None:
+            from pathlib import Path as _Path
+            p = _Path(self._transcript_path)
+            with open(p, "a", encoding="utf-8") as f:
+                f.write(json.dumps({
+                    "kind": "call",
+                    "epoch": epoch,
+                    "top_rule": top_rule,
+                    "all_fired": {k: bool(v) for k, v in all_fired.items()},
+                    "user_message": messages[1]["content"],
+                    "response": raw,
+                }) + "\n")
         data = json.loads(raw)
         return _decision_from_dict(data, top_rule=top_rule, current_lr=current_lr)
 

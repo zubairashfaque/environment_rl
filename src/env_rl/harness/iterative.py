@@ -111,6 +111,7 @@ def run_iterative(
             model=model_name,
             prior_attempts=prior,
             temperature=temperature,
+            transcript_path=attempt_dir / "llm_transcript.jsonl",
         )
 
         scores = run_one_attempt(policy, workspace, judge_logs)
