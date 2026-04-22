@@ -23,24 +23,25 @@
 ## Table of Contents
 
 1. [What this is](#what-this-is)
-2. [Architecture](#architecture)
-3. [The 7 rules at a glance](#the-7-rules-at-a-glance)
-4. [Prerequisites](#prerequisites)
-5. [Step-by-step setup](#step-by-step-setup)
-6. [Running the project](#running-the-project)
-   - [6.1 Synthetic smoke test (no CIFAR download)](#61-synthetic-smoke-test-no-cifar-download)
-   - [6.2 Real CIFAR-10 with an OpenAI model](#62-real-cifar-10-with-an-openai-model)
-   - [6.3 The scripted reference agent (no API key)](#63-the-scripted-reference-agent-no-api-key)
-7. [Per-attempt output files — what everything means](#per-attempt-output-files--what-everything-means)
-8. [Inspecting a run with `show_full_run.py`](#inspecting-a-run-with-show_full_runpy)
-9. [Understanding the scores](#understanding-the-scores)
-10. [Cheat-attempt defenses](#cheat-attempt-defenses)
-11. [Tuning & knobs](#tuning--knobs)
-12. [Troubleshooting](#troubleshooting)
-13. [Running the test suite](#running-the-test-suite)
-14. [Project layout](#project-layout)
-15. [Why this is "Iterative Self-Refine," not RL](#why-this-is-iterative-self-refine-not-rl)
-16. [Contributing / extending](#contributing--extending)
+2. [The Engineer's Invisible Playbook](#the-engineers-invisible-playbook)
+3. [Seven Rules, Seven Real Scenarios](#seven-rules-seven-real-scenarios)
+4. [Enter the LLM — the brain that watches the logs](#enter-the-llm--the-brain-that-watches-the-logs)
+5. [Architecture](#architecture)
+6. [The 7 rules at a glance](#the-7-rules-at-a-glance)
+7. [Prerequisites](#prerequisites)
+8. [Step-by-step setup](#step-by-step-setup)
+9. [Running the project](#running-the-project)
+10. [A Real Run, Narrated — Three Acts on CIFAR-10](#a-real-run-narrated--three-acts-on-cifar-10)
+11. [Per-attempt output files — what everything means](#per-attempt-output-files--what-everything-means)
+12. [Inspecting a run with `show_full_run.py`](#inspecting-a-run-with-show_full_runpy)
+13. [Understanding the scores](#understanding-the-scores)
+14. [Cheat-attempt defenses](#cheat-attempt-defenses)
+15. [Tuning & knobs](#tuning--knobs)
+16. [Troubleshooting](#troubleshooting)
+17. [Running the test suite](#running-the-test-suite)
+18. [Project layout](#project-layout)
+19. [Why this is "Iterative Self-Refine," not RL](#why-this-is-iterative-self-refine-not-rl)
+20. [Contributing / extending](#contributing--extending)
 
 ---
 
@@ -58,6 +59,91 @@ Training a deep learning model well isn't the training loop — it's the **hundr
 | Cheat-attempt defenses | **5** (shadow log, model swap, trajectory forge, skipped decision, forged log line) |
 | Typical decisions per run | 20–60 |
 | Cost per attempt (`gpt-4o-mini`) | ~**\$0.01** |
+
+---
+
+## The Engineer's Invisible Playbook
+
+Go and sit behind any senior ML engineer while they train a model. What you will see is not a person writing clever PyTorch code. What you will see is a person **reading logs**. They are watching training loss tick down, val loss tick sideways, gradient norms drift up. They are running a checklist in their head that nobody ever wrote down — a checklist with rules like:
+
+- *"If val loss stops improving for 5 epochs, stop or decay the learning rate."*
+- *"If gradients are exploding, clip them and drop the LR."*
+- *"If half my neurons are dead, swap ReLU for LeakyReLU."*
+- *"If train accuracy is capped and gradients are clean, I need more capacity."*
+- *"If batch size is too small, gradients are too noisy — make the batch bigger."*
+- *"If training is memorising the data, regularise or simplify."*
+
+That checklist is a **knowledge base**. Senior engineers carry it around as tacit knowledge. It is the thing that separates a good run from a mediocre one. It is the thing that is hardest to pass on in a textbook, because the value is not in the rule itself — the value is in *applying the right rule at the right moment, looking at the right signal*.
+
+### The senior engineer's training loop — the thing the loss curve does not show
+
+```mermaid
+flowchart LR
+    A[Observe<br/>loss, grad norms,<br/>dead neurons] --> B[Diagnose<br/>which rule<br/>is firing?]
+    B --> C[Prescribe<br/>playbook remedy<br/>for that rule]
+    C --> D[Action<br/>drop LR, swap act,<br/>early stop, ...]
+    D --> E[Resume<br/>watch the next<br/>few epochs]
+    E --> A
+```
+
+Every 1–3 epochs the engineer runs this loop. Over a 40-epoch run that is **20+ judgment calls**. The model improves because the decisions are good, not because the loop is clever.
+
+## Seven Rules, Seven Real Scenarios
+
+In env_rl, this tacit knowledge gets **written down**. Seven rules cover the levers that matter most during training. Each one has a symptom you can measure from the live model, a cause you can attribute, and a remedy you can execute. Here is what each rule looks like in practice.
+
+| Rule | The scenario you have lived through | Decision logged |
+|---|---|---|
+| **R1** LR | *"Loss is bouncing around like a pinball."* Update-to-param ratio EMA is 5×10⁻² — ten times healthy. | `hyperparameter_change` · cites R1 · `decrease_lr` · `lr_new = lr/3` |
+| **R2** batch size | *"Gradients are too noisy to trust."* Grad noise scale is 12, healthy band is [50, 5000]. | `hyperparameter_change` · cites R2 · `increase_batch_size` |
+| **R3** early stop | *"Train still improving; val flat for 5 epochs."* Model is memorising. | `hyperparameter_change` · cites R3 · `stop` |
+| **R4** depth | *"Train-acc stuck 70–71% for 4 epochs; gradients clean; activations healthy."* Out of capacity. | `architecture_change` · cites R4 · `add_block` |
+| **R5** activations | *"68% of ReLUs stuck at zero for 3 epochs."* Half the model is dead code. | `architecture_change` · cites R5 · `swap_activation → leaky_relu` |
+| **R6** vanishing | *"Layer-1 grad norm 1×10⁻⁶ while last layer is 0.5."* Signal never reaches early layers. | `architecture_change` · cites R6 · `add_bn_or_residual` |
+| **R7** exploding | *"Grad norm 14.2 for 3 epochs, then loss printed `nan`."* Step size blew up. | `hyperparameter_change` · cites R7 · `decrease_lr` · `lr_new = lr/10` |
+
+R7 has the **highest** precedence — if any other rule fires at the same epoch, it waits.
+
+### Strategy revamp — the same rules, different phase
+
+A good engineer does not apply one rule once. They re-evaluate the whole strategy at key checkpoints. The same rules operate throughout a run, but the *dominant concern* shifts with phase — and the precedence ordering `stability > capacity > tuning > process` roughly tracks which phase you should be in.
+
+```mermaid
+flowchart LR
+    P1["ep 0–5<br/>Phase 1: Stabilize<br/>R7, R6 concerns"] --> P2["ep 5–15<br/>Phase 2: Capacity<br/>R4, R5 concerns"]
+    P2 --> P3["ep 15–35<br/>Phase 3: Tune<br/>R1, R2 concerns"]
+    P3 --> P4["ep 35+<br/>Phase 4: Process<br/>R3 concerns"]
+```
+
+## Enter the LLM — the brain that watches the logs
+
+What if **instead of a senior engineer reading the logs**, you had an LLM doing it? The LLM has read thousands of training papers. It knows what a dead ReLU is. It can read a playbook, interpret a diagnostic, and pick an action in seconds. And unlike a human, it does not get tired at epoch 20 and miss the signal at epoch 21.
+
+At every epoch, the monitor hands the LLM the current diagnostic state and any fired rules. The LLM returns a structured JSON decision: *"here is the event type, the rule I am citing, my remedy direction, my justification"*. The harness applies the remedy. Training resumes. The LLM has just taken one of the hundreds of judgment calls a senior engineer would have taken — except every one of its decisions is **logged in a tamper-evident record**.
+
+| | Senior engineer at the terminal | LLM behind env_rl |
+|---|---|---|
+| Knowledge | Tacit; no two engineers agree | Explicit playbook, same every run |
+| Decision record | Post-hoc notes from memory | Logged live, hash-chained |
+| Consistency | Gets tired late in a run | Epoch 1 and epoch 40 feel the same |
+| Parallelism | One experiment at a time | Trivially parallel; ~\$0.01/run in tokens |
+| Auditability | Invisible to any benchmark | Every decision scored by an 11-step audit |
+
+### The full loop — monitor, LLM, judge
+
+```mermaid
+flowchart LR
+    M["Monitor<br/>(during run)<br/>measures via PyTorch hooks<br/>fires rules canonically"] -->|fired rules + diagnostics| L["LLM brain<br/>(during run)<br/>reads playbook<br/>emits JSON decision"]
+    L -->|structured decision| H["Harness<br/>(during run)<br/>applies remedy<br/>logs through monitor API"]
+    H -->|new epoch| M
+    H -.->|after run| J["Judge<br/>(post-run)<br/>11-step audit<br/>two decoupled scores"]
+    J --> S1[Accuracy Score]
+    J --> S2[Process Score]
+```
+
+During the run: monitor measures, LLM decides, harness executes. After the run: judge reconstructs the whole story from the logs and emits two decoupled scores. **The LLM is never the judge; the judge is never the LLM.** Their independence is the point.
+
+This is why the project is called *env_rl*. It is an **environment** in the RL sense: a world that presents observations to an agent, accepts the agent's actions, and hands back a reward. The observations are live diagnostics. The actions are playbook decisions. The reward is two-axis (accuracy + process). The agent, today, is an OpenAI model operating in an in-context self-refine loop. Future work could train a real RL policy on top — but the environment half, the hard part, is what this repo is.
 
 ---
 
