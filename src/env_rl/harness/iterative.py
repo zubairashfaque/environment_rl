@@ -12,6 +12,7 @@ files, CLI output) is labeled with ``mode = "iterative_self_refine"``.
 from __future__ import annotations
 
 import json
+import shutil
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -87,8 +88,13 @@ def run_iterative(
         # ensure a fully clean session between attempts
         _session_mod._reset_for_tests()
 
-        workspace = base_dir / f"attempt_{i:02d}" / "workspace"
-        judge_logs = base_dir / f"attempt_{i:02d}" / "judge_logs"
+        # wipe any residue from a previous run — log chains are append-only
+        # so even a single stale line will hard-fail the judge's bookend check
+        attempt_dir = base_dir / f"attempt_{i:02d}"
+        if attempt_dir.exists():
+            shutil.rmtree(attempt_dir)
+        workspace = attempt_dir / "workspace"
+        judge_logs = attempt_dir / "judge_logs"
         workspace.mkdir(parents=True, exist_ok=True)
         judge_logs.mkdir(parents=True, exist_ok=True)
 
