@@ -105,14 +105,53 @@ src/env_rl/
 ├── monitor/    only legitimate logging path (hooks, rules, hash-chained logs)
 ├── judge/      post-run 11-step audit + two-axis scoring
 ├── data/       CIFAR-10 splits + loaders (test split held out)
-└── agent/      reference CNN + scripted training run
+├── agent/      reference CNN + training loop (policy-pluggable)
+└── harness/    OpenAI-backed LLM decision agent + iterative self-refine
 conf/           Hydra configs (monitor, judge, training)
 docs/           playbook.md — the 7-rule contract
 tests/
-├── unit/       142 tests across monitor/judge/data/agent
+├── unit/       154 tests across monitor/judge/data/agent/harness
 └── integration/ 6 end-to-end + cheat-attempt tests
-examples/       CLI entrypoints
+examples/       CLI entrypoints (reference + LLM agent)
 ```
+
+## Running with a real LLM (OpenAI API)
+
+The `harness/` module plugs an OpenAI model in as the decision-maker. Python
+drives the training loop; when a rule fires, the LLM is called with the
+diagnostic state and returns a structured decision (`event_type`, `cites`,
+`justification`, `remedy_direction`, `remedy_params`). Between attempts, the
+next attempt's system prompt carries the prior attempts' scores and violation
+list.
+
+**This is iterative self-refine, not RL.** Model weights never change — all
+"learning" lives in the prompt and is discarded when the conversation ends.
+See README section "Scoring" for why, and `Project env rl.md` §12 for the
+denominator-gaming caveat.
+
+```bash
+export OPENAI_API_KEY=sk-...
+poetry run python examples/run_llm_agent.py \
+    --attempts 3 --epochs 3 --synthetic --model gpt-4o-mini
+```
+
+Output:
+
+```json
+{
+  "best_attempt": 3,
+  "best_scores": { "accuracy_score": 0.5, "process_score": 1.0, ... },
+  "all_attempts": [
+    { "index": 1, "accuracy_score": 0.2, "process_score": 0.5, ... },
+    { "index": 2, "accuracy_score": 0.3, "process_score": 0.8, ... },
+    { "index": 3, "accuracy_score": 0.5, "process_score": 1.0, ... }
+  ]
+}
+```
+
+Each attempt's workspace, logs, and scores are persisted under
+`./llm_runs/attempt_NN/` so you can inspect exactly what the LLM decided and
+how the judge graded it.
 
 ## Verification
 

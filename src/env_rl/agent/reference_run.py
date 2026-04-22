@@ -122,8 +122,17 @@ def run_reference(
     train_loader: Iterable,
     val_loader: Iterable,
     monitor_config: dict,
+    *,
+    policy: Any = None,
 ) -> dict[str, Any]:
     """Run the reference training loop. Returns final summary dict.
+
+    ``policy`` is optional. When provided, it must implement the
+    ``DecisionPolicy`` protocol (see :mod:`env_rl.harness.policy`). The loop
+    asks ``policy.decide(...)`` for each epoch where any rule fires, and
+    applies the returned remedy (LR change / architecture edit) via the
+    standard monitor API. When ``policy`` is None, the original hard-coded
+    heuristic is used.
 
     Writes deliverables to ``cfg.workspace``; assumes the monitor's log_dir
     has been configured upstream.
@@ -161,9 +170,11 @@ def run_reference(
     )
 
     current_lr = cfg.lr
+    current_batch_size = cfg.batch_size
     best_val_acc = 0.0
     best_state = None
     train_loader_list = list(train_loader)
+    metrics_history: list[dict[str, Any]] = []
 
     for epoch in range(cfg.max_epochs):
         model.train()
@@ -194,27 +205,46 @@ def run_reference(
             train_loss=train_loss,
             train_acc=train_acc,
             lr=current_lr,
-            batch_size=cfg.batch_size,
+            batch_size=current_batch_size,
         )
         rule_evals = monitor.evaluate_rules(metrics)
         monitor.log_epoch(metrics)
         monitor.log_rule_eval(rule_evals)
+        metrics_history.append(dict(metrics))
 
         # Respond to fired rules — honor precedence by actioning the top class
         # and deferring everything else explicitly.
         top = _highest_precedence(rule_evals)
         if top is not None:
-            event_type, extra, new_lr = _remedy_for(top, current_lr)
-            monitor.log_decision(
-                event_type,
-                cites=[top],
-                justification=f"auto-remedy for {top} at epoch {epoch}",
-                **extra,
-            )
-            if new_lr != current_lr:
-                for g in optim.param_groups:
-                    g["lr"] = new_lr
-                current_lr = new_lr
+            if policy is not None:
+                decision = policy.decide(
+                    top_rule=top,
+                    all_fired=dict(rule_evals),
+                    metrics=metrics,
+                    epoch=epoch,
+                    current_lr=current_lr,
+                    current_batch_size=current_batch_size,
+                    recent_history=metrics_history,
+                )
+                monitor.log_decision(**decision.to_log_kwargs())
+                # Apply remedy if the policy specified a new LR
+                lr_new = decision.remedy_params.get("lr_new")
+                if lr_new is not None and lr_new != current_lr and lr_new > 0:
+                    for g in optim.param_groups:
+                        g["lr"] = float(lr_new)
+                    current_lr = float(lr_new)
+            else:
+                event_type, extra, new_lr = _remedy_for(top, current_lr)
+                monitor.log_decision(
+                    event_type,
+                    cites=[top],
+                    justification=f"auto-remedy for {top} at epoch {epoch}",
+                    **extra,
+                )
+                if new_lr != current_lr:
+                    for g in optim.param_groups:
+                        g["lr"] = new_lr
+                    current_lr = new_lr
             # Defer every other fired rule.
             for rule, fired in rule_evals.items():
                 if fired and rule != top:
