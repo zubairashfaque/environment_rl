@@ -165,6 +165,7 @@ def main() -> None:
                 "best_scores": {
                     "accuracy_score": result.best.scores.accuracy_score,
                     "process_score": result.best.scores.process_score,
+                    "hard_fail": result.best.scores.hard_fail,
                     "test_accuracy": result.best.scores.test_accuracy,
                     "violations": result.best.scores.violations,
                     "total_decisions": result.best.scores.total_decisions,
@@ -172,6 +173,7 @@ def main() -> None:
                 "all_attempts": [
                     {
                         "index": a.index,
+                        "hard_fail": a.scores.hard_fail,
                         "accuracy_score": a.scores.accuracy_score,
                         "process_score": a.scores.process_score,
                         "violations": a.scores.violations,
@@ -184,6 +186,13 @@ def main() -> None:
             indent=2,
         )
     )
+    if any(a.scores.hard_fail for a in result.all_attempts):
+        print(
+            "\nNote: one or more attempts hard-failed. Inspect "
+            f"{base_dir}/attempt_NN/summary.json for the violation list, and "
+            f"{base_dir}/attempt_NN/judge_logs/ for the full audit trail.",
+            file=sys.stderr,
+        )
 
 
 if __name__ == "__main__":

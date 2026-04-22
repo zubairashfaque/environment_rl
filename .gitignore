@@ -34,8 +34,20 @@ data/cifar10/cifar-10-batches-py/
 data/cifar10/*.tar.gz
 workspace/
 judge_logs/
+llm_runs/
+llm_runs_*/
 *.pt
 *.pth
+
+# Secrets (NEVER commit)
+.env
+.env.*
+*.key
+openai_key.txt
+
+# Ad-hoc run scripts
+run.sh
+/tmp_*/
 
 # Editors
 .vscode/

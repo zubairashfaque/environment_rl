@@ -64,16 +64,12 @@ DECISION_SCHEMA: dict[str, Any] = {
                 "lr_new": {"type": "number"},
                 "edit_op": {
                     "type": "string",
-                    "enum": [
-                        "add_block",
-                        "remove_block",
-                        "swap_activation",
-                        "add_bn",
-                        "remove_bn",
-                        "none",
-                    ],
+                    "enum": ["swap_activation", "none"],
                 },
-                "edit_to": {"type": "string"},
+                "edit_to": {
+                    "type": "string",
+                    "enum": ["relu", "leaky_relu", "gelu", "none"],
+                },
             },
             "required": ["lr_new", "edit_op", "edit_to"],
             "additionalProperties": False,
@@ -129,7 +125,11 @@ Hard rules (violations lose process score, but they are caught):
       R6 → add_bn_or_residual
   - Fill remedy_params even if unused. For actions that do not change LR, set
     lr_new to the CURRENT lr. For actions that are not architecture changes,
-    set edit_op to "none" and edit_to to "".
+    set edit_op to "none" and edit_to to "none".
+  - THIS HARNESS supports ONLY ONE architecture edit: swap_activation. Valid
+    edit_to values are "relu", "leaky_relu", "gelu", or "none". If you want
+    to add capacity (R4), you cannot — defer with rule_triggered_no_action
+    and justification "harness does not support add_block".
   - Justification should be concise (under 40 words) and cite the relevant
     diagnostic signal (e.g., "max_layer_grad_norm EMA 14.2 over 3 epochs").
   - `rule_triggered_no_action` is a deliberate deferral. Only use it when you
