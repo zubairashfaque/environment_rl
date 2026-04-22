@@ -19,7 +19,10 @@ from typing import Any, Callable
 
 from env_rl.harness import HARNESS_MODE
 from env_rl.harness.policy import OpenAIDecisionPolicy
-from env_rl.harness.prompt import AttemptSummary
+from env_rl.harness.prompt import (
+    AttemptSummary,
+    build_iterative_system_prompt,
+)
 from env_rl.judge import run_judge
 from env_rl.judge.coverage import Violation, audit_rule_coverage
 from env_rl.judge.defensibility import DefensibilityFailure, audit_defensibility
@@ -105,6 +108,35 @@ def run_iterative(
         judge_logs = attempt_dir / "judge_logs"
         workspace.mkdir(parents=True, exist_ok=True)
         judge_logs.mkdir(parents=True, exist_ok=True)
+
+        # Persist the iterative-feedback block that will be fed into THIS
+        # attempt's system prompt, so it's easy to see the self-refine loop
+        # at work without having to diff transcripts.
+        feedback_record = {
+            "mode": HARNESS_MODE,
+            "attempt_index": i,
+            "prior_attempts": [
+                {
+                    "attempt_index": p.attempt_index,
+                    "accuracy_score": p.accuracy_score,
+                    "process_score": p.process_score,
+                    "test_accuracy": p.test_accuracy,
+                    "total_decisions": p.total_decisions,
+                    "violations": p.violations,
+                    "violation_summary": p.violation_summary,
+                }
+                for p in prior
+            ],
+            "system_prompt_excerpt": (
+                "" if not prior
+                else build_iterative_system_prompt(
+                    prior, include_playbook=False
+                )
+            ),
+        }
+        (attempt_dir / "feedback_in.json").write_text(
+            json.dumps(feedback_record, indent=2)
+        )
 
         policy = OpenAIDecisionPolicy(
             client=client,
