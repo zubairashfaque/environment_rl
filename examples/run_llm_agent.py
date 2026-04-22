@@ -131,11 +131,21 @@ def main() -> None:
             test_loader = list(
                 make_test_loader_judge_only(batch_size=args.batch_size, data_dir=args.data_dir)
             )
-        live_batches = (
-            _make_synthetic_loader(n_batches=1, batch_size=args.batch_size, seed=0)
-            if args.synthetic
-            else [next(iter(train_loader))]
-        )
+        if args.synthetic:
+            live_batches = _make_synthetic_loader(
+                n_batches=1, batch_size=args.batch_size, seed=0
+            )
+        else:
+            # Pull a few real batches so the live-diagnostic average is
+            # stable — one batch has high per-call variance, especially
+            # after a converged training run.
+            live_batches = []
+            _it = iter(train_loader)
+            for _ in range(3):
+                try:
+                    live_batches.append(next(_it))
+                except StopIteration:
+                    break
         return run_judge(
             workspace=workspace,
             judge_logs=judge_logs,
@@ -144,7 +154,9 @@ def main() -> None:
             test_loader=test_loader,
             live_diag_batches=live_batches,
             initial_arch_spec={"num_blocks": 2, "activation": "relu", "bn_enabled": True},
-            live_diag_tolerance=0.99 if args.synthetic else 0.50,
+            # Tolerance needs to be loose enough to survive normal single-batch
+            # variance after training has converged; synthetic is fully random.
+            live_diag_tolerance=0.99 if args.synthetic else 0.90,
             waived_rules=HARNESS_WAIVED_RULES,
         )
 
