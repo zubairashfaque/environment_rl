@@ -227,6 +227,15 @@ class OpenAIDecisionPolicy:
         if self._transcript_path is not None:
             from pathlib import Path as _Path
             p = _Path(self._transcript_path)
+            # Extract usage if the SDK provided it (openai >= 1.0)
+            usage: dict[str, Any] = {}
+            u = getattr(response, "usage", None)
+            if u is not None:
+                usage = {
+                    "prompt_tokens": int(getattr(u, "prompt_tokens", 0) or 0),
+                    "completion_tokens": int(getattr(u, "completion_tokens", 0) or 0),
+                    "total_tokens": int(getattr(u, "total_tokens", 0) or 0),
+                }
             with open(p, "a", encoding="utf-8") as f:
                 f.write(json.dumps({
                     "kind": "call",
@@ -235,6 +244,8 @@ class OpenAIDecisionPolicy:
                     "all_fired": {k: bool(v) for k, v in all_fired.items()},
                     "user_message": messages[1]["content"],
                     "response": raw,
+                    "usage": usage,
+                    "model": self._model,
                 }) + "\n")
         data = json.loads(raw)
         return _decision_from_dict(data, top_rule=top_rule, current_lr=current_lr)

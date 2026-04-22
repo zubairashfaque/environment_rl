@@ -119,7 +119,11 @@ def main() -> None:
                     manifest_path=args.manifest,
                 )
             )
-        run_reference(cfg, train_loader, val_loader, _monitor_config(judge_logs), policy=policy)
+        run_reference(
+            cfg, train_loader, val_loader, _monitor_config(judge_logs),
+            policy=policy,
+            training_trace_path=workspace.parent / "training_trace.jsonl",
+        )
         test_loader = (
             _make_synthetic_loader(n_batches=2, batch_size=args.batch_size, seed=999)
             if args.synthetic
@@ -158,6 +162,7 @@ def main() -> None:
             # variance after training has converged; synthetic is fully random.
             live_diag_tolerance=0.99 if args.synthetic else 0.90,
             waived_rules=HARNESS_WAIVED_RULES,
+            judge_trace_path=workspace.parent / "judge_trace.json",
         )
 
     result = run_iterative(

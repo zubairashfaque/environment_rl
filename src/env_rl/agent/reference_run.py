@@ -124,6 +124,7 @@ def run_reference(
     monitor_config: dict,
     *,
     policy: Any = None,
+    training_trace_path: Any = None,
 ) -> dict[str, Any]:
     """Run the reference training loop. Returns final summary dict.
 
@@ -140,6 +141,18 @@ def run_reference(
     torch.manual_seed(cfg.seed)
     workspace = Path(cfg.workspace)
     workspace.mkdir(parents=True, exist_ok=True)
+
+    # Human-readable training trace (per-epoch summary + decisions + remedies)
+    _trace_path = Path(training_trace_path) if training_trace_path else None
+    if _trace_path is not None:
+        _trace_path.parent.mkdir(parents=True, exist_ok=True)
+        _trace_path.write_text("")  # truncate
+
+    def _trace(record: dict[str, Any]) -> None:
+        if _trace_path is None:
+            return
+        with open(_trace_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record) + "\n")
 
     model = ResidualCNN(
         num_blocks=cfg.num_blocks,
@@ -161,6 +174,11 @@ def run_reference(
         monitor_config=monitor_config,
     )
     monitor.attach(model)
+    _trace({"kind": "session_start", "cfg": {
+        "seed": cfg.seed, "lr": cfg.lr, "batch_size": cfg.batch_size,
+        "max_epochs": cfg.max_epochs, "num_blocks": cfg.num_blocks,
+        "base_channels": cfg.base_channels, "activation": cfg.activation,
+    }})
 
     optim = torch.optim.SGD(
         model.parameters(),
@@ -213,6 +231,21 @@ def run_reference(
         monitor.log_rule_eval(rule_evals)
         metrics_history.append(dict(metrics))
 
+        _trace({
+            "kind": "epoch",
+            "epoch": epoch,
+            "train_loss": train_loss,
+            "train_acc": train_acc,
+            "val_loss": metrics.get("val_loss"),
+            "val_acc": metrics.get("val_acc"),
+            "lr": current_lr,
+            "max_grad": metrics.get("max_layer_grad_norm"),
+            "min_grad": metrics.get("min_layer_grad_norm"),
+            "dead_relu": metrics.get("dead_relu_fraction"),
+            "gns": metrics.get("grad_noise_scale"),
+            "fired_rules": sorted([r for r, v in rule_evals.items() if v]),
+        })
+
         # Respond to fired rules — honor precedence by actioning the top class
         # and deferring everything else explicitly.
         top = _highest_precedence(rule_evals)
@@ -254,12 +287,25 @@ def run_reference(
                             )
                             decision.remedy_params = {}
                 monitor.log_decision(**decision.to_log_kwargs())
+                _trace({
+                    "kind": "decision",
+                    "epoch": epoch,
+                    "source": "policy",
+                    "cited_rule": top,
+                    "event_type": decision.event_type,
+                    "justification": decision.justification[:200],
+                    "remedy_direction": decision.remedy_direction,
+                    "remedy_params": decision.remedy_params,
+                })
                 # Apply remedy if the policy specified a new LR
                 lr_new = decision.remedy_params.get("lr_new")
                 if lr_new is not None and lr_new != current_lr and lr_new > 0:
                     for g in optim.param_groups:
                         g["lr"] = float(lr_new)
                     current_lr = float(lr_new)
+                    _trace({"kind": "remedy_applied", "epoch": epoch,
+                            "change": "lr", "from": current_lr / (lr_new / current_lr) if lr_new else 0,
+                            "to": lr_new})
             else:
                 event_type, extra, new_lr = _remedy_for(top, current_lr)
                 monitor.log_decision(
@@ -286,6 +332,7 @@ def run_reference(
             best_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
 
     monitor.end_session()
+    _trace({"kind": "session_end", "best_val_acc": best_val_acc})
 
     # write deliverables
     if best_state is None:
