@@ -166,6 +166,7 @@ class OpenAIDecisionPolicy:
         enable_ensemble: bool = False,
         ensemble_n_samples: int = 3,
         ensemble_temperature: float = 0.7,
+        tracer: Any = None,
     ) -> None:
         self._client = client
         self._model = model
@@ -174,6 +175,9 @@ class OpenAIDecisionPolicy:
             prior_attempts or []
         )
         self._transcript_path = transcript_path
+        # Shared agent tracer (None → no-op)
+        from env_rl.harness.agent_trace import NULL_TRACER
+        self._tracer = tracer or NULL_TRACER
 
         # Stage-6 integrations (wired in Stage 7+)
         if enable_cache:
@@ -229,6 +233,13 @@ class OpenAIDecisionPolicy:
                     user_message="<cache_hit>", response=None,
                     usage={}, cache_hit=True, ensemble=False, agreement=1.0,
                 )
+                self._tracer.record(
+                    agent="decision_llm", action="cache_hit", epoch=epoch,
+                    input_summary={"top_rule": top_rule, "fingerprint": cache_fp},
+                    output_summary={"event_type": cached.event_type,
+                                    "cites": list(cached.cites)},
+                    model=self._model,
+                )
                 return cached
 
         messages = build_decision_messages(
@@ -275,6 +286,16 @@ class OpenAIDecisionPolicy:
                 )
                 if self._cache is not None and cache_fp is not None:
                     self._cache.put(cache_fp, decision)
+                self._tracer.record(
+                    agent="decision_llm", action="ensemble_call", epoch=epoch,
+                    input_summary={"top_rule": top_rule,
+                                   "n_samples": self._ensemble_n_samples,
+                                   "temperature": self._ensemble_temperature},
+                    output_summary={"event_type": decision.event_type,
+                                    "cites": list(decision.cites),
+                                    "agreement": agreement},
+                    model=self._model,
+                )
                 return decision
 
         # --- Standard single-sample call --------------------------------
@@ -304,6 +325,15 @@ class OpenAIDecisionPolicy:
         )
         if self._cache is not None and cache_fp is not None:
             self._cache.put(cache_fp, decision)
+        self._tracer.record(
+            agent="decision_llm", action="api_call", epoch=epoch,
+            input_summary={"top_rule": top_rule,
+                           "fired_count": sum(1 for v in all_fired.values() if v)},
+            output_summary={"event_type": decision.event_type,
+                            "cites": list(decision.cites),
+                            "remedy_direction": decision.remedy_direction},
+            token_cost=usage, model=self._model,
+        )
         return decision
 
     def _write_transcript_entry(

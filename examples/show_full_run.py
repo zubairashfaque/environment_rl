@@ -147,6 +147,46 @@ def _show_llm(attempt_dir: Path, filter_epoch: int | None) -> None:
         print(f"\n  [total]  {call_count} LLM calls, {total_tokens} tokens")
 
 
+def _show_agent_trace(attempt_dir: Path) -> None:
+    p = attempt_dir / "agent_trace.jsonl"
+    _section("AGENT TRACE (every agent interaction)")
+    if not p.exists():
+        print(f"(no agent_trace.jsonl — run with meta-loop or a newer harness)")
+        return
+    events = _read_jsonl(p)
+    if not events:
+        print("  (empty)")
+        return
+    # Quick aggregate by agent
+    from collections import Counter
+    agent_counts = Counter(e.get("agent", "?") for e in events)
+    print("  Events by agent:")
+    for agent, n in agent_counts.most_common():
+        print(f"    {n:>3d}  {agent}")
+    print()
+    total_tokens = sum(
+        (e.get("token_cost", {}) or {}).get("total_tokens", 0) for e in events
+    )
+    total_time = sum(e.get("duration_ms", 0.0) for e in events)
+    print(f"  Aggregate: {len(events)} events, "
+          f"{total_tokens} tokens, {total_time:.0f} ms")
+    print()
+    # Chronological event list (compact)
+    for e in events:
+        t = e.get("duration_ms", 0.0)
+        ep = e.get("epoch")
+        ep_str = f"ep{ep:>3d}" if ep is not None else "  -  "
+        agent = e.get("agent", "?")
+        action = e.get("action", "?")
+        out = e.get("output_summary") or {}
+        out_parts = []
+        for k in ("event_type", "cites", "technique", "winner", "pass_rate", "outcome"):
+            if k in out:
+                out_parts.append(f"{k}={out[k]}")
+        extra = "  ".join(out_parts)
+        print(f"  {ep_str}  {agent:>12s} {action:<20s} {t:>6.1f}ms  {extra}")
+
+
 def _show_feedback(attempt_dir: Path) -> None:
     p = attempt_dir / "feedback_in.json"
     _section("ITERATIVE FEEDBACK (fed in to this attempt)")
@@ -172,7 +212,8 @@ def main() -> None:
     parser.add_argument("attempt_dir", type=Path,
                         help="e.g. llm_runs/attempt_01")
     parser.add_argument("--section",
-                        choices=["all", "summary", "judge", "training", "llm", "feedback"],
+                        choices=["all", "summary", "judge", "training", "llm",
+                                 "feedback", "agents"],
                         default="all")
     parser.add_argument("--epoch", type=int, default=None,
                         help="only show LLM calls at this epoch")
@@ -183,11 +224,12 @@ def main() -> None:
         sys.exit(2)
 
     sections = [args.section] if args.section != "all" else [
-        "summary", "feedback", "training", "judge", "llm"
+        "summary", "feedback", "training", "judge", "agents", "llm"
     ]
     for s in sections:
         {"summary": _show_summary, "judge": _show_judge,
          "training": _show_training, "feedback": _show_feedback,
+         "agents": _show_agent_trace,
          "llm": lambda d: _show_llm(d, args.epoch)}[s](args.attempt_dir)
     print()
 

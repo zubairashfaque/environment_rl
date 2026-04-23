@@ -15,6 +15,7 @@
 | 📖 **Design doc** | [`Project env rl.md`](./Project%20env%20rl.md) |
 | 📋 **7-rule playbook** | [`docs/playbook.md`](./docs/playbook.md) |
 | 🤖 **LLM setup guide** | [`docs/setup-llm.md`](./docs/setup-llm.md) |
+| 🧩 **Agentic framework** | [`docs/agentic-framework.md`](./docs/agentic-framework.md) (TL;DR: we don't use one) |
 | 🏗️ **Implementation plan** | `~/.claude/plans/plan-the-project-make-optimized-squirrel.md` |
 | ✍️ **Blog post** | https://zubairashfaque.github.io/blog/env-rl-disciplined-training.html |
 

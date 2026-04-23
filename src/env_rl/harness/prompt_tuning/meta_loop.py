@@ -64,6 +64,7 @@ class MetaLoop:
         tuner: PromptTuner | None = None,
         judge: PromptJudge | None = None,
         scoreboard: Any = None,
+        tracer: Any = None,
     ) -> None:
         self._base_dir = Path(base_dir)
         self._prompts_dir = self._base_dir / "prompts"
@@ -77,6 +78,10 @@ class MetaLoop:
                 path=self._base_dir / ".scoreboard.json"
             )
         self._scoreboard = scoreboard
+
+        # Shared agent tracer (None → no-op)
+        from env_rl.harness.agent_trace import NULL_TRACER
+        self._tracer = tracer or NULL_TRACER
 
         self._versions: list[PromptVersion] = []
         self._iterations: list[MetaLoopIteration] = []
@@ -115,23 +120,60 @@ class MetaLoop:
         Returns the ``MetaLoopIteration`` describing what changed (if
         anything). Promotes the winning prompt into ``self.champion_prompt``.
         """
-        edit: PromptEdit = self._tuner.propose_edit(
-            violations=violations, attempt_index=attempt_index,
-        )
+        # --- Tuner -----------------------------------------------------
+        with self._tracer.timed(
+            agent="tuner", action="propose_edit",
+            input_summary={"attempt_index": attempt_index,
+                           "violation_count": len(violations)},
+        ) as trace_out:
+            edit: PromptEdit = self._tuner.propose_edit(
+                violations=violations, attempt_index=attempt_index,
+            )
+            trace_out["output_summary"] = {
+                "technique": edit.technique,
+                "rationale": edit.rationale,
+                "addition_len": len(edit.addition),
+            }
+
         candidate = edit.apply(self._champion_prompt)
 
         # No real edit proposed -> skip tester round
         if candidate == self._champion_prompt:
             return self._record_noop(attempt_index=attempt_index, edit=edit)
 
-        # Evaluate candidate
-        new_results = self._tester.run_suite(candidate)
-        verdict: PromptJudgment = self._judge.compare(
-            old_prompt=self._champion_prompt,
-            new_prompt=candidate,
-            old_results=self._champion_results,
-            new_results=new_results,
-        )
+        # --- Tester ----------------------------------------------------
+        with self._tracer.timed(
+            agent="tester", action="run_suite",
+            input_summary={"prompt_version_parent": self._champion_version,
+                           "prompt_len": len(candidate)},
+        ) as trace_out:
+            new_results = self._tester.run_suite(candidate)
+            trace_out["output_summary"] = {
+                "pass_rate": pass_rate(new_results),
+                "passed": sum(1 for r in new_results if r.passed),
+                "total": len(new_results),
+            }
+
+        # --- Judge -----------------------------------------------------
+        with self._tracer.timed(
+            agent="judge", action="compare_prompts",
+            input_summary={"old_version": self._champion_version,
+                           "old_len": len(self._champion_prompt),
+                           "new_len": len(candidate)},
+        ) as trace_out:
+            verdict: PromptJudgment = self._judge.compare(
+                old_prompt=self._champion_prompt,
+                new_prompt=candidate,
+                old_results=self._champion_results,
+                new_results=new_results,
+            )
+            trace_out["output_summary"] = {
+                "winner": verdict.winner,
+                "old_pass_rate": verdict.old_pass_rate,
+                "new_pass_rate": verdict.new_pass_rate,
+                "improvements": verdict.improvements,
+                "regressions": verdict.regressions,
+            }
 
         new_version = self._versions[-1].version + 1
         v = self._persist(
@@ -156,6 +198,11 @@ class MetaLoop:
         )
         try:
             self._scoreboard.record(edit.technique, outcome)
+            self._tracer.record(
+                agent="scoreboard", action="record",
+                input_summary={"technique": edit.technique},
+                output_summary={"outcome": outcome},
+            )
         except Exception:  # noqa: BLE001
             pass  # scoreboard is informational; never let it crash the run
 

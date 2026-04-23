@@ -152,6 +152,11 @@ def run_iterative(
             json.dumps(feedback_record, indent=2)
         )
 
+        # Shared per-attempt agent tracer
+        from env_rl.harness.agent_trace import AgentTracer
+        tracer = AgentTracer(attempt_dir / "agent_trace.jsonl")
+        tracer.set_attempt_index(i)
+
         # If meta-loop is active, the champion prompt replaces the normal
         # system prompt (prior-attempt feedback still gets appended on top
         # via the usual OpenAIDecisionPolicy constructor — except when
@@ -166,7 +171,12 @@ def run_iterative(
                     initial_prompt=base_initial,
                     tester_client=client,
                     tester_model=model_name,
+                    tracer=tracer,
                 )
+            else:
+                # On subsequent attempts, update the existing meta-loop's
+                # tracer so events land in the right attempt_NN folder.
+                ml._tracer = tracer  # noqa: SLF001
             system_prompt_override = ml.champion_prompt
         else:
             system_prompt_override = None
@@ -178,6 +188,7 @@ def run_iterative(
             temperature=temperature,
             transcript_path=attempt_dir / "llm_transcript.jsonl",
             system_prompt=system_prompt_override,
+            tracer=tracer,
         )
 
         scores = run_one_attempt(policy, workspace, judge_logs)
