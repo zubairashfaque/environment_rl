@@ -285,8 +285,19 @@ def run_reference(
                                 current_activation = str(edit.get("to", current_activation)).lower()
                             elif op == "add_block":
                                 current_num_blocks += 1
+                                # Invalidate any prior "best" checkpoint:
+                                # the old state_dict has fewer blocks than
+                                # the new model, so loading it at judge-time
+                                # would fail with a shape mismatch. The next
+                                # epoch's val_acc becomes the new best.
+                                best_val_acc = 0.0
+                                best_state = None
                             elif op == "remove_block":
                                 current_num_blocks = max(1, current_num_blocks - 1)
+                                # Same invariant: the saved state has more
+                                # blocks than the new model.
+                                best_val_acc = 0.0
+                                best_state = None
                         except ValueError:
                             decision.event_type = "rule_triggered_no_action"
                             decision.justification = (
