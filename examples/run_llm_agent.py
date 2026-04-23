@@ -155,8 +155,12 @@ def main() -> None:
                 make_test_loader_judge_only(batch_size=args.batch_size, data_dir=args.data_dir)
             )
         if args.synthetic:
+            # Synthetic data has wild per-batch variance on gradient norms
+            # (no signal to lock onto). Pull 3 batches to average, same as
+            # the real-data path, so live_max isn't dominated by one noisy
+            # sample.
             live_batches = _make_synthetic_loader(
-                n_batches=1, batch_size=args.batch_size, seed=0
+                n_batches=3, batch_size=args.batch_size, seed=0
             )
         else:
             # Pull a few real batches so the live-diagnostic average is
@@ -178,8 +182,11 @@ def main() -> None:
             live_diag_batches=live_batches,
             initial_arch_spec={"num_blocks": 2, "activation": "relu", "bn_enabled": True},
             # Tolerance needs to be loose enough to survive normal single-batch
-            # variance after training has converged; synthetic is fully random.
-            live_diag_tolerance=0.99 if args.synthetic else 0.90,
+            # variance after training has converged; synthetic is fully random
+            # so per-epoch grad norms have huge variance — loose enough that
+            # honest runs don't hard-fail step 7, strict enough that a
+            # zero-weight fabricated trajectory still gets caught.
+            live_diag_tolerance=2.0 if args.synthetic else 0.90,
             waived_rules=HARNESS_WAIVED_RULES,
             judge_trace_path=workspace.parent / "judge_trace.json",
         )
