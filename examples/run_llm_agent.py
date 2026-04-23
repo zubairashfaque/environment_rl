@@ -67,10 +67,23 @@ def main() -> None:
         "--synthetic", action="store_true",
         help="Use synthetic random tensors (no CIFAR-10 download).",
     )
+    # Prompt-tuning is ON by default now. --meta-loop kept as a no-op for
+    # backwards compatibility with existing scripts.
     parser.add_argument(
         "--meta-loop", action="store_true",
-        help="Enable Tuner/Tester/Judge prompt-evolution meta-loop "
-             "(prompts evolve across attempts, not just prior-attempt feedback).",
+        help="(deprecated — prompt tuning is on by default; this flag is a no-op)",
+    )
+    parser.add_argument(
+        "--no-meta-loop", action="store_true",
+        help="Disable prompt fine-tuning (static feedback-only prompt).",
+    )
+    parser.add_argument(
+        "--reset-prompt-history", action="store_true",
+        help="Wipe prompts/, .scoreboard.json, meta_loop_log.json at run start.",
+    )
+    parser.add_argument(
+        "--resume-from-champion", action="store_true",
+        help="Start MetaLoop from the previous run's highest-version prompt.",
     )
     parser.add_argument("--data-dir", default="./data/cifar10")
     parser.add_argument("--manifest", default="./data/cifar10/splits.json",
@@ -179,7 +192,9 @@ def main() -> None:
         run_one_attempt=run_one_attempt,
         base_dir=base_dir,
         waived_rules=HARNESS_WAIVED_RULES,
-        meta_loop=args.meta_loop,
+        meta_loop=(not args.no_meta_loop),  # on by default
+        reset_prompt_history=args.reset_prompt_history,
+        resume_from_champion=args.resume_from_champion,
     )
 
     from env_rl.harness import HARNESS_MODE

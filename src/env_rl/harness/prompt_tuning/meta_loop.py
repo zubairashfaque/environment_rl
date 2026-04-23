@@ -65,6 +65,7 @@ class MetaLoop:
         judge: PromptJudge | None = None,
         scoreboard: Any = None,
         tracer: Any = None,
+        seed_prompt_path: Path | str | None = None,
     ) -> None:
         self._base_dir = Path(base_dir)
         self._prompts_dir = self._base_dir / "prompts"
@@ -86,16 +87,28 @@ class MetaLoop:
         self._versions: list[PromptVersion] = []
         self._iterations: list[MetaLoopIteration] = []
 
+        # If seed_prompt_path is given, load it as the starting prompt so the
+        # meta-loop resumes from the previous champion rather than the default.
+        effective_initial = initial_prompt
+        seed_technique = "initial"
+        seed_rationale = "starting prompt (playbook + response rules)"
+        if seed_prompt_path is not None:
+            seed_p = Path(seed_prompt_path)
+            if seed_p.exists():
+                effective_initial = seed_p.read_text()
+                seed_technique = "resumed_champion"
+                seed_rationale = f"resumed from {seed_p}"
+
         # Evaluate the initial prompt once so we have a baseline pass rate
-        initial_results = self._tester.run_suite(initial_prompt)
+        initial_results = self._tester.run_suite(effective_initial)
         v0 = self._persist(
-            version=0, parent=None, technique="initial",
-            rationale="starting prompt (playbook + response rules)",
-            prompt=initial_prompt,
+            version=0, parent=None, technique=seed_technique,
+            rationale=seed_rationale,
+            prompt=effective_initial,
             scenario_pass_rate=pass_rate(initial_results),
         )
         self._versions.append(v0)
-        self._champion_prompt = initial_prompt
+        self._champion_prompt = effective_initial
         self._champion_version = 0
         self._champion_results = initial_results
 

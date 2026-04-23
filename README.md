@@ -663,6 +663,86 @@ ITERATIVE FEEDBACK (fed in to this attempt)
 
 ---
 
+## Prompt Fine-Tuning Lifecycle
+
+Prompt fine-tuning (the Tuner→Tester→Judge meta-loop) is **ON by default** as of the latest version. Every run self-improves the LLM's system prompt across attempts.
+
+### When does fine-tuning happen?
+
+```mermaid
+flowchart LR
+    A[Attempt N<br/>training completes] -->|violations collected| B[Tuner<br/>proposes prompt edit]
+    B --> C[Tester<br/>runs candidate on<br/>scenario suite]
+    C --> D[Judge<br/>compares old vs new]
+    D -->|new wins| E[Champion promoted<br/>→ next attempt]
+    D -->|old wins| F[Champion kept<br/>→ next attempt]
+    E --> G[Scoreboard<br/>records technique outcome]
+    F --> G
+    G --> H[Attempt N+1<br/>starts with new champion]
+```
+
+Trigger: **once per attempt**, automatically. No flag needed.
+
+### What persists between runs of the same `--base-dir`?
+
+| File | Contents | Lifetime |
+|---|---|---|
+| `<base_dir>/prompts/v*.txt` | Every prompt version tried, in order | Permanent (until `--reset-prompt-history`) |
+| `<base_dir>/.scoreboard.json` | Per-technique win/loss/tie counts | Permanent (until `--reset-prompt-history`) |
+| `<base_dir>/meta_loop_log.json` | Full lineage of edits + judge verdicts | Permanent (until `--reset-prompt-history`) |
+| `<base_dir>/attempt_NN/` | Training artifacts per attempt | Wiped at the start of each re-run of attempt NN |
+
+⚠ **Important:** when you re-run with the same `--base-dir`, the MetaLoop instantiates fresh — it **does not** automatically resume from the last champion. Each run starts from the default playbook prompt. Use `--resume-from-champion` to carry forward.
+
+### Reset to default (wipe prompt-tuning history)
+
+**Inline flag** — reset and run in one command:
+```bash
+poetry run python examples/run_llm_agent.py --synthetic --attempts 2 --epochs 5 \
+    --base-dir llm_runs_test --reset-prompt-history
+```
+
+**Standalone tool** — interactive, shows what will be deleted:
+```bash
+poetry run python examples/reset_prompt_tuning.py llm_runs_test
+# Or: poetry run python examples/reset_prompt_tuning.py llm_runs_test --yes
+```
+
+Both delete `prompts/`, `.scoreboard.json`, `meta_loop_log.json`. `attempt_NN/` folders are left alone.
+
+### Resume from the previous run's best prompt
+
+```bash
+poetry run python examples/run_llm_agent.py --synthetic --attempts 2 --epochs 5 \
+    --base-dir llm_runs_test --resume-from-champion
+```
+
+The MetaLoop reads the highest-numbered `prompts/v*.txt` from the prior run and uses it as the starting point. Subsequent edits continue the lineage. Useful when you've evolved a prompt you like and want to keep iterating on it.
+
+### Disable prompt fine-tuning entirely
+
+```bash
+poetry run python examples/run_llm_agent.py --synthetic --attempts 2 --epochs 5 \
+    --base-dir llm_runs_test --no-meta-loop
+```
+
+Reverts to the pre-Stage-3 behavior: static prompt (playbook + response rules), prior-attempt feedback appended as text only, no Tuner/Tester/Judge. Useful for:
+- Baseline comparisons
+- Debugging (isolate whether a problem is in the prompt evolution or the decision LLM)
+- Speed (saves the scenario-suite roundtrip per attempt)
+
+### Quick reference
+
+| Goal | Flag |
+|---|---|
+| Default — fine-tune every attempt | (nothing; it's on) |
+| Clean slate but keep base_dir | `--reset-prompt-history` |
+| Keep last run's best prompt | `--resume-from-champion` |
+| Turn off evolution | `--no-meta-loop` |
+| Standalone reset without a run | `examples/reset_prompt_tuning.py <base_dir>` |
+
+---
+
 ## Understanding the scores
 
 Two decoupled scalars, reported independently.

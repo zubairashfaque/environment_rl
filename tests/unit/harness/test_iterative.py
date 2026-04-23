@@ -41,6 +41,7 @@ def test_iterative_runs_n_attempts_and_returns_best(tmp_path: Path) -> None:
         client=client,
         run_one_attempt=fake_run_one,
         base_dir=tmp_path,
+        meta_loop=False,  # these tests pre-date the default-on change
     )
     assert isinstance(result, IterativeResult)
     assert len(result.all_attempts) == 3
@@ -68,6 +69,7 @@ def test_iterative_accumulates_prior_feedback_into_later_attempts(
         client=client,
         run_one_attempt=fake_run_one,
         base_dir=tmp_path,
+        meta_loop=False,  # pre-date the default-on change; keep static prompt
     )
 
     assert len(observed_prompts) == 3

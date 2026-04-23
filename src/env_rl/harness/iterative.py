@@ -88,20 +88,58 @@ def run_iterative(
     run_one_attempt: Callable[[OpenAIDecisionPolicy, Path, Path], Scores],
     base_dir: Path,
     waived_rules: frozenset[str] | set[str] | None = None,
-    meta_loop: bool = False,
+    meta_loop: bool = True,
+    reset_prompt_history: bool = False,
+    resume_from_champion: bool = False,
 ) -> IterativeResult:
     """Run ``attempts`` full training+judge cycles; accumulate feedback.
 
     ``run_one_attempt(policy, workspace, judge_logs) -> Scores`` is the injected
     do-one-run function. Swapped in by the CLI (real) and tests (fake).
 
-    If ``meta_loop=True``, after each attempt a Tuner→Tester→Judge cycle
-    proposes a prompt edit, evaluates it on the scenario suite, and promotes
-    the winner — so the prompt evolves across attempts beyond just injecting
-    prior-attempt feedback.
+    ``meta_loop`` is ON by default: after each attempt a Tuner→Tester→Judge
+    cycle proposes a prompt edit, evaluates it on the scenario suite, and
+    promotes the winner — so the prompt evolves across attempts. Set to
+    False to run with a static (feedback-only) prompt.
+
+    ``reset_prompt_history=True`` wipes ``base_dir/prompts/``,
+    ``.scoreboard.json``, and ``meta_loop_log.json`` at the start of the run.
+
+    ``resume_from_champion=True`` loads the highest-numbered
+    ``base_dir/prompts/v*.txt`` from a prior run as the MetaLoop's v000.
     """
     base_dir = Path(base_dir)
     base_dir.mkdir(parents=True, exist_ok=True)
+
+    # --- prompt-tuning lifecycle controls ---------------------------------
+    if reset_prompt_history:
+        prompts_dir = base_dir / "prompts"
+        if prompts_dir.exists():
+            shutil.rmtree(prompts_dir)
+        for name in (".scoreboard.json", "meta_loop_log.json"):
+            p = base_dir / name
+            if p.exists():
+                p.unlink()
+        print(f"[prompt-tuning] reset history at {base_dir}")
+
+    seed_prompt_path = None
+    if resume_from_champion and meta_loop:
+        prompts_dir = base_dir / "prompts"
+        if prompts_dir.exists():
+            candidates = sorted(prompts_dir.glob("v*.txt"))
+            if candidates:
+                seed_prompt_path = candidates[-1]
+                print(f"[prompt-tuning] resuming from {seed_prompt_path}")
+
+    # Startup banner
+    if meta_loop:
+        print(
+            "[prompt-tuning] ON  "
+            f"(base_dir={base_dir}, --no-meta-loop to disable)"
+        )
+    else:
+        print("[prompt-tuning] OFF  (static feedback-only prompt)")
+
     prior: list[AttemptSummary] = []
     all_attempts: list[AttemptResult] = []
 
@@ -172,6 +210,7 @@ def run_iterative(
                     tester_client=client,
                     tester_model=model_name,
                     tracer=tracer,
+                    seed_prompt_path=seed_prompt_path,
                 )
             else:
                 # On subsequent attempts, update the existing meta-loop's
