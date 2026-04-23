@@ -15,7 +15,7 @@ firings.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -25,6 +25,23 @@ import torch.nn.functional as F
 
 from env_rl import monitor
 from env_rl.agent.model import ResidualCNN
+
+
+@dataclass
+class PendingRestart:
+    """A restart-class edit was requested — next attempt should start fresh
+    from epoch 0 with the updated architecture in its initial config."""
+
+    reason: str                         # op name: add_block | remove_block | add_bn
+    triggered_at_epoch: int
+    cited_rule: str
+    # Architecture overrides to apply for the next attempt
+    num_blocks_delta: int = 0           # +1 for add_block, -1 for remove_block
+    bn_enabled_override: bool | None = None
+    # Carry-forward state (activation swaps are CONTINUE edits, so they
+    # persist into the next attempt's initial config)
+    activation: str = "relu"
+    preserved_num_blocks: int = 0       # current num_blocks at time of trigger
 
 
 @dataclass
@@ -192,7 +209,9 @@ def run_reference(
     current_batch_size = cfg.batch_size
     current_activation = cfg.activation
     current_num_blocks = cfg.num_blocks
+    current_bn_enabled = cfg.bn_enabled
     early_stop_requested = False
+    pending_restart: PendingRestart | None = None
     best_val_acc = 0.0
     best_state = None
     train_loader_list = list(train_loader)
@@ -268,36 +287,56 @@ def run_reference(
                 # rule_triggered_no_action so the log never claims an edit
                 # happened when none did (judge step 6 invariant).
                 if decision.event_type == "architecture_change":
-                    from env_rl.harness.edits import apply_edit_in_place, is_supported
+                    from env_rl.harness.edits import (
+                        apply_edit_in_place,
+                        is_restart_edit,
+                        is_supported,
+                    )
                     edit = decision.remedy_params.get("edit") or {}
                     op = edit.get("op", "none") if edit else "none"
-                    if op == "none" or not is_supported(edit):
+                    if op == "none" or (not is_restart_edit(edit) and not is_supported(edit)):
                         decision.event_type = "rule_triggered_no_action"
                         decision.justification = (
                             f"harness does not execute edit {op!r}; "
                             f"deferring {top} (run longer or action an LR remedy)"
                         )
                         decision.remedy_params = {}
+                    elif is_restart_edit(edit):
+                        # Restart-class edits (add_block, remove_block, add_bn)
+                        # do NOT mutate the live model. They schedule a fresh
+                        # attempt starting at epoch 0 with the updated
+                        # architecture baked into the initial config, so that
+                        # attempt's run_config.json matches its submitted
+                        # model with zero architecture_change events.
+                        delta = 0
+                        bn_override: bool | None = None
+                        if op == "add_block":
+                            delta = 1
+                        elif op == "remove_block":
+                            delta = -1
+                        elif op == "add_bn":
+                            bn_override = True
+                        pending_restart = PendingRestart(
+                            reason=op,
+                            triggered_at_epoch=epoch,
+                            cited_rule=top,
+                            num_blocks_delta=delta,
+                            bn_enabled_override=bn_override,
+                            activation=current_activation,
+                            preserved_num_blocks=current_num_blocks,
+                        )
+                        decision.event_type = "rule_triggered_no_action"
+                        decision.justification = (
+                            f"restart scheduled: {op} for {top}; "
+                            f"next attempt starts fresh with updated architecture"
+                        )
+                        decision.remedy_params = {}
+                        early_stop_requested = True
                     else:
                         try:
                             apply_edit_in_place(model, edit, optimizer=optim)
                             if op == "swap_activation":
                                 current_activation = str(edit.get("to", current_activation)).lower()
-                            elif op == "add_block":
-                                current_num_blocks += 1
-                                # Invalidate any prior "best" checkpoint:
-                                # the old state_dict has fewer blocks than
-                                # the new model, so loading it at judge-time
-                                # would fail with a shape mismatch. The next
-                                # epoch's val_acc becomes the new best.
-                                best_val_acc = 0.0
-                                best_state = None
-                            elif op == "remove_block":
-                                current_num_blocks = max(1, current_num_blocks - 1)
-                                # Same invariant: the saved state has more
-                                # blocks than the new model.
-                                best_val_acc = 0.0
-                                best_state = None
                         except ValueError:
                             decision.event_type = "rule_triggered_no_action"
                             decision.justification = (
@@ -426,6 +465,7 @@ def run_reference(
     return {
         "best_val_acc": best_val_acc,
         "final_epoch": cfg.max_epochs - 1,
+        "pending_restart": pending_restart,
     }
 
 

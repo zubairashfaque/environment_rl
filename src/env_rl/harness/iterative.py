@@ -147,6 +147,11 @@ def run_iterative(
     # initial (prior-free) system prompt on the first attempt.
     ml = None  # type: ignore[assignment]
 
+    # Architecture overrides accumulated from restart-class edits in prior
+    # attempts. Each restart is applied as an absolute update to the cfg that
+    # the CLI's run_one_attempt callback will use to build the next attempt.
+    cfg_overrides: dict[str, Any] = {}
+
     for i in range(1, attempts + 1):
         # ensure a fully clean session between attempts
         _session_mod._reset_for_tests()
@@ -230,7 +235,25 @@ def run_iterative(
             tracer=tracer,
         )
 
-        scores = run_one_attempt(policy, workspace, judge_logs)
+        # Invoke the per-attempt callback. Two supported signatures:
+        #   old:  (policy, workspace, judge_logs) -> Scores
+        #   new:  (policy, workspace, judge_logs, *, cfg_overrides) ->
+        #                  Scores | tuple[Scores, PendingRestart | None]
+        # We detect capability via TypeError so pre-existing test stubs keep
+        # working without modification.
+        try:
+            call_result = run_one_attempt(
+                policy, workspace, judge_logs, cfg_overrides=cfg_overrides
+            )
+        except TypeError:
+            call_result = run_one_attempt(policy, workspace, judge_logs)
+
+        pending_restart = None
+        if isinstance(call_result, tuple):
+            scores, pending_restart = call_result
+        else:
+            scores = call_result
+
         coverage, defensibility = _collect_violations(judge_logs, waived_rules=waived_rules)
         violations = _violations_to_summary(coverage, defensibility)
 
@@ -273,10 +296,43 @@ def run_iterative(
                         "total_decisions": summary.total_decisions,
                     },
                     "violation_summary": violations,
+                    "pending_restart": (
+                        {
+                            "reason": pending_restart.reason,
+                            "triggered_at_epoch": pending_restart.triggered_at_epoch,
+                            "cited_rule": pending_restart.cited_rule,
+                            "num_blocks_delta": pending_restart.num_blocks_delta,
+                            "bn_enabled_override": pending_restart.bn_enabled_override,
+                            "activation": pending_restart.activation,
+                            "preserved_num_blocks": pending_restart.preserved_num_blocks,
+                        }
+                        if pending_restart is not None else None
+                    ),
                 },
                 indent=2,
             )
         )
+
+        # Accumulate cfg overrides for the NEXT attempt if a restart-class
+        # edit was scheduled. The CLI's run_one_attempt callback reads
+        # cfg_overrides to build a fresh ReferenceRunConfig so the next
+        # attempt starts at epoch 0 with the updated architecture.
+        if pending_restart is not None:
+            base_nb = int(
+                cfg_overrides.get("num_blocks", pending_restart.preserved_num_blocks)
+            )
+            new_nb = max(1, base_nb + pending_restart.num_blocks_delta)
+            cfg_overrides["num_blocks"] = new_nb
+            # Activation swaps are CONTINUE edits — carry the current
+            # activation forward so restarts don't undo legitimate swaps.
+            cfg_overrides["activation"] = pending_restart.activation
+            if pending_restart.bn_enabled_override is not None:
+                cfg_overrides["bn_enabled"] = pending_restart.bn_enabled_override
+            print(
+                f"[restart] attempt {i} scheduled restart via "
+                f"{pending_restart.reason} (rule {pending_restart.cited_rule}); "
+                f"next attempt cfg: {cfg_overrides}"
+            )
 
     best = max(
         all_attempts,

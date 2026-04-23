@@ -7,8 +7,11 @@ import torch.nn as nn  # noqa: E402
 
 from env_rl.agent.model import ResidualCNN  # noqa: E402
 from env_rl.harness.edits import (  # noqa: E402
+    CONTINUE_EDITS,
+    RESTART_EDITS,
     SUPPORTED_EDITS,
     apply_edit_in_place,
+    is_restart_edit,
     is_supported,
 )
 
@@ -117,3 +120,42 @@ def test_remove_block_forward_still_works() -> None:
     apply_edit_in_place(model, {"op": "remove_block"})
     out = model(torch.randn(2, 3, 32, 32))
     assert out.shape == (2, 10)
+
+
+# -- RESTART vs CONTINUE classification --------------------------------------
+
+
+def test_continue_edits_set_contains_swap_and_none() -> None:
+    assert "swap_activation" in CONTINUE_EDITS
+    assert "none" in CONTINUE_EDITS
+
+
+def test_restart_edits_set_contains_block_and_bn_changes() -> None:
+    assert "add_block" in RESTART_EDITS
+    assert "remove_block" in RESTART_EDITS
+    assert "add_bn" in RESTART_EDITS
+
+
+def test_restart_and_continue_sets_are_disjoint() -> None:
+    assert CONTINUE_EDITS.isdisjoint(RESTART_EDITS)
+
+
+def test_is_restart_edit_swap_activation_false() -> None:
+    assert not is_restart_edit({"op": "swap_activation", "to": "leaky_relu"})
+
+
+def test_is_restart_edit_none_false() -> None:
+    assert not is_restart_edit({"op": "none"})
+    assert not is_restart_edit({})  # default op is "none"
+
+
+def test_is_restart_edit_add_block_true() -> None:
+    assert is_restart_edit({"op": "add_block"})
+
+
+def test_is_restart_edit_remove_block_true() -> None:
+    assert is_restart_edit({"op": "remove_block"})
+
+
+def test_is_restart_edit_add_bn_true() -> None:
+    assert is_restart_edit({"op": "add_bn"})

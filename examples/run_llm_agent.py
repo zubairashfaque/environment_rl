@@ -103,14 +103,17 @@ def main() -> None:
 
     # Prepare loaders once per attempt - create fresh inside the closure so the
     # monitor's epoch counter starts at 0 each attempt.
-    def run_one_attempt(policy, workspace, judge_logs):
+    def run_one_attempt(policy, workspace, judge_logs, *, cfg_overrides=None):
+        overrides = cfg_overrides or {}
         cfg = ReferenceRunConfig(
             lr=args.lr,
             batch_size=args.batch_size,
             max_epochs=args.epochs,
             workspace=str(workspace),
-            num_blocks=2,
+            num_blocks=int(overrides.get("num_blocks", 2)),
             base_channels=16,
+            activation=str(overrides.get("activation", "relu")),
+            bn_enabled=bool(overrides.get("bn_enabled", True)),
         )
         if args.synthetic:
             train_loader = _make_synthetic_loader(
@@ -138,11 +141,12 @@ def main() -> None:
                     manifest_path=args.manifest,
                 )
             )
-        run_reference(
+        ref_result = run_reference(
             cfg, train_loader, val_loader, _monitor_config(judge_logs),
             policy=policy,
             training_trace_path=workspace.parent / "training_trace.jsonl",
         )
+        pending_restart = ref_result.get("pending_restart")
         test_loader = (
             _make_synthetic_loader(n_batches=2, batch_size=args.batch_size, seed=999)
             if args.synthetic
@@ -173,14 +177,18 @@ def main() -> None:
                     live_batches.append(next(_it))
                 except StopIteration:
                     break
-        return run_judge(
+        scores = run_judge(
             workspace=workspace,
             judge_logs=judge_logs,
             root_hash="0" * 64,
             target_acc=args.target_acc,
             test_loader=test_loader,
             live_diag_batches=live_batches,
-            initial_arch_spec={"num_blocks": 2, "activation": "relu", "bn_enabled": True},
+            initial_arch_spec={
+                "num_blocks": cfg.num_blocks,
+                "activation": cfg.activation,
+                "bn_enabled": cfg.bn_enabled,
+            },
             # Tolerance needs to be loose enough to survive normal single-batch
             # variance after training has converged; synthetic is fully random
             # so per-epoch grad norms have huge variance — loose enough that
@@ -190,6 +198,7 @@ def main() -> None:
             waived_rules=HARNESS_WAIVED_RULES,
             judge_trace_path=workspace.parent / "judge_trace.json",
         )
+        return scores, pending_restart
 
     result = run_iterative(
         attempts=args.attempts,

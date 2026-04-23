@@ -136,12 +136,28 @@ Hard rules (violations lose process score, but they are caught):
     R3 (early stop)       → hyperparameter_change with
                              remedy_direction="stop" (loop exits cleanly)
     R4 (add capacity)     → architecture_change with edit_op="add_block"
+                             (RESTART class — see note below)
     R5 (activations)      → architecture_change with
                              edit_op="swap_activation", edit_to in
-                             {"leaky_relu", "gelu"}
+                             {"leaky_relu", "gelu"}  (CONTINUE class)
     R6 (vanishing grads)  → hyperparameter_change with lr_new (LR warmup
                              helps vanishing gradients indirectly per playbook)
     R7 (exploding)        → hyperparameter_change with lr_new (LR drop 10x)
+
+  EDIT CLASSIFICATION — RESTART vs CONTINUE:
+    CONTINUE (applied in place, training resumes with same weights):
+      swap_activation — network function nearly unchanged.
+    RESTART (schedules a NEW attempt from epoch 0 with the updated
+    architecture baked into run_config; does NOT mutate the live model):
+      add_block, remove_block, add_bn — these introduce or remove
+      parameters, so continuing training would wedge untrained weights
+      beside trained ones. The harness logs the decision as
+      rule_triggered_no_action with justification "restart scheduled",
+      ends the current attempt cleanly, and the NEXT attempt runs from
+      scratch with num_blocks / bn_enabled updated. Decide a RESTART
+      edit only when you judge the architecture truly needs to change
+      — it costs a full retraining from epoch 0. Prefer LR-based remedies
+      when both paths are valid.
 
   Every rule firing must produce a matching decision within the ±2-epoch
   window; deferrals must eventually clear; the wrong remedy direction is

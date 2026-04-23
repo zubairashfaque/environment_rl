@@ -26,6 +26,22 @@ import torch.nn as nn
 SUPPORTED_EDITS = frozenset({"swap_activation", "add_block", "remove_block", "none"})
 SUPPORTED_ACTIVATIONS = frozenset({"relu", "leaky_relu", "gelu"})
 
+#: Edits that can safely continue training with the same weights. The
+#: network function is unchanged or nearly-unchanged.
+CONTINUE_EDITS = frozenset({"swap_activation", "none"})
+
+#: Edits that introduce untrained parameters (add_block, add_bn) or lose
+#: learned structure (remove_block). Training continues poorly under these
+#: because parameters drift — the honest answer is to restart the attempt
+#: from epoch 0 with the new architecture baked into the initial config.
+RESTART_EDITS = frozenset({"add_block", "remove_block", "add_bn"})
+
+
+def is_restart_edit(edit: dict[str, Any]) -> bool:
+    """True iff the edit should trigger an attempt restart (not in-place)."""
+    op = edit.get("op", "none")
+    return op in RESTART_EDITS
+
 _ACTIVATION_CLS: dict[str, type[nn.Module]] = {
     "relu": nn.ReLU,
     "leaky_relu": lambda: nn.LeakyReLU(0.01),  # type: ignore[dict-item]
